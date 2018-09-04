@@ -18,22 +18,22 @@
 
 #include <QUuid>
 
-#include <SettingHandle.h>
-#include <Rig.h>
-#include <Sound.h>
-#include <ScriptEngine.h>
-
-#include <controllers/Pose.h>
-#include <controllers/Actions.h>
 #include <AvatarConstants.h>
 #include <avatars-renderer/Avatar.h>
 #include <avatars-renderer/ScriptAvatar.h>
+#include <ClientTraitsHandler.h>
+#include <controllers/Pose.h>
+#include <controllers/Actions.h>
+#include <EntityItem.h>
+#include <ThreadSafeValueCache.h>
+#include <Rig.h>
+#include <ScriptEngine.h>
+#include <SettingHandle.h>
+#include <Sound.h>
 
 #include "AtRestDetector.h"
 #include "MyCharacterController.h"
 #include "RingBufferHistory.h"
-#include <ThreadSafeValueCache.h>
-#include <EntityItem.h>
 
 class AvatarActionHold;
 class ModelItemID;
@@ -201,6 +201,8 @@ class MyAvatar : public Avatar {
     Q_PROPERTY(bool hasAudioEnabledFaceMovement READ getHasAudioEnabledFaceMovement WRITE setHasAudioEnabledFaceMovement)
     Q_PROPERTY(float rotationRecenterFilterLength READ getRotationRecenterFilterLength WRITE setRotationRecenterFilterLength)
     Q_PROPERTY(float rotationThreshold READ getRotationThreshold WRITE setRotationThreshold)
+    Q_PROPERTY(bool enableStepResetRotation READ getEnableStepResetRotation WRITE setEnableStepResetRotation)
+    Q_PROPERTY(bool enableDrawAverageFacing READ getEnableDrawAverageFacing WRITE setEnableDrawAverageFacing)
     //TODO: make gravity feature work Q_PROPERTY(glm::vec3 gravity READ getGravity WRITE setGravity)
 
     Q_PROPERTY(glm::vec3 leftHandPosition READ getLeftHandPosition)
@@ -317,6 +319,9 @@ public:
     // This can also update the avatar's position to follow the HMD
     // as it moves through the world.
     void updateFromHMDSensorMatrix(const glm::mat4& hmdSensorMatrix);
+
+    // compute the hip to hand average azimuth.
+    glm::vec2 computeHandAzimuth() const;
 
     // read the location of a hand controller and save the transform
     void updateJointFromController(controller::Action poseKey, ThreadSafeValueCache<glm::mat4>& matrixCache);
@@ -869,8 +874,6 @@ public:
 
     void resetFullAvatarURL();
 
-    virtual void setAttachmentData(const QVector<AttachmentData>& attachmentData) override;
-
     MyCharacterController* getCharacterController() { return &_characterController; }
     const MyCharacterController* getCharacterController() const { return &_characterController; }
 
@@ -911,6 +914,10 @@ public:
 
     virtual void rebuildCollisionShape() override;
 
+    const glm::vec2& getHipToHandController() const { return _hipToHandController; }
+    void setHipToHandController(glm::vec2 currentHipToHandController) { _hipToHandController = currentHipToHandController; }
+    const glm::vec2& getHeadControllerFacing() const { return _headControllerFacing; }
+    void setHeadControllerFacing(glm::vec2 currentHeadControllerFacing) { _headControllerFacing = currentHeadControllerFacing; }
     const glm::vec2& getHeadControllerFacingMovingAverage() const { return _headControllerFacingMovingAverage; }
     void setHeadControllerFacingMovingAverage(glm::vec2 currentHeadControllerFacing) { _headControllerFacingMovingAverage = currentHeadControllerFacing; }
     float getCurrentStandingHeight() const { return _currentStandingHeight; }
@@ -933,7 +940,8 @@ public:
     * @returns {object[]}
     */
     Q_INVOKABLE QVariantList getAvatarEntitiesVariant();
-    void removeAvatarEntities(const std::function<bool(const QUuid& entityID)>& condition = {});
+    void clearAvatarEntities();
+    void removeWearableAvatarEntities();
 
     /**jsdoc
      * @function MyAvatar.isFlying
@@ -1047,6 +1055,8 @@ public:
     // results are in sensor frame (-z forward)
     glm::mat4 deriveBodyFromHMDSensor() const;
 
+    glm::mat4 getSpine2RotationRigSpace() const;
+
     glm::vec3 computeCounterBalance();
 
     // derive avatar body position and orientation from using the current HMD Sensor location in relation to the previous
@@ -1089,6 +1099,12 @@ public:
 
     float computeStandingHeightMode(const controller::Pose& head);
     glm::quat computeAverageHeadRotation(const controller::Pose& head);
+
+    virtual void setAttachmentData(const QVector<AttachmentData>& attachmentData) override;
+    virtual QVector<AttachmentData> getAttachmentData() const override;
+
+    virtual QVariantList getAttachmentsVariant() const override;
+    virtual void setAttachmentsVariant(const QVariantList& variant) override;
 
 public slots:
 
@@ -1330,7 +1346,6 @@ public slots:
      */
     void setAnimGraphUrl(const QUrl& url);  // thread-safe
 
-
     /**jsdoc
      * @function MyAvatar.getPositionForAudio
      * @returns {Vec3} 
@@ -1342,7 +1357,6 @@ public slots:
      * @returns {Quat} 
      */
     glm::quat getOrientationForAudio();
-
 
     /**jsdoc
      * @function MyAvatar.setModelScale
@@ -1513,6 +1527,10 @@ private:
     float getRotationRecenterFilterLength() const { return _rotationRecenterFilterLength; }
     void setRotationThreshold(float angleRadians);
     float getRotationThreshold() const { return _rotationThreshold; }
+    void setEnableStepResetRotation(bool stepReset) { _stepResetRotationEnabled = stepReset; }
+    bool getEnableStepResetRotation() const { return _stepResetRotationEnabled; }
+    void setEnableDrawAverageFacing(bool drawAverage) { _drawAverageFacingEnabled = drawAverage; }
+    bool getEnableDrawAverageFacing() const { return _drawAverageFacingEnabled; }
     bool isMyAvatar() const override { return true; }
     virtual int parseDataFromBuffer(const QByteArray& buffer) override;
     virtual glm::vec3 getSkeletonPosition() const override;
@@ -1528,10 +1546,20 @@ private:
     void setScriptedMotorTimescale(float timescale);
     void setScriptedMotorFrame(QString frame);
     void setScriptedMotorMode(QString mode);
+
+    // Attachments
     virtual void attach(const QString& modelURL, const QString& jointName = QString(),
                         const glm::vec3& translation = glm::vec3(), const glm::quat& rotation = glm::quat(),
                         float scale = 1.0f, bool isSoft = false,
                         bool allowDuplicates = false, bool useSaved = true) override;
+
+    virtual void detachOne(const QString& modelURL, const QString& jointName = QString()) override;
+    virtual void detachAll(const QString& modelURL, const QString& jointName = QString()) override;
+    
+    // Attachments/Avatar Entity
+    void attachmentDataToEntityProperties(const AttachmentData& data, EntityItemProperties& properties);
+    AttachmentData entityPropertiesToAttachmentData(const EntityItemProperties& properties) const;
+    bool findAvatarEntity(const QString& modelURL, const QString& jointName, QUuid& entityID);
 
     bool cameraInsideHead(const glm::vec3& cameraPosition) const;
 
@@ -1625,6 +1653,8 @@ private:
     std::atomic<bool> _hasScriptedBlendShapes { false };
     std::atomic<float> _rotationRecenterFilterLength { 4.0f };
     std::atomic<float> _rotationThreshold { 0.5235f };  // 30 degrees in radians
+    std::atomic<bool> _stepResetRotationEnabled { true };
+    std::atomic<bool> _drawAverageFacingEnabled { false };
 
     // working copy -- see AvatarData for thread-safe _sensorToWorldMatrixCache, used for outward facing access
     glm::mat4 _sensorToWorldMatrix { glm::mat4() };
@@ -1637,6 +1667,8 @@ private:
     glm::vec2 _headControllerFacing;  // facing vector in xz plane (sensor space)
     glm::vec2 _headControllerFacingMovingAverage { 0.0f, 0.0f };   // facing vector in xz plane (sensor space)
     glm::quat _averageHeadRotation { 0.0f, 0.0f, 0.0f, 1.0f };
+
+    glm::vec2 _hipToHandController { 0.0f, -1.0f };  // spine2 facing vector in xz plane (avatar space)
 
     float _currentStandingHeight { 0.0f };
     bool _resetMode { true };
@@ -1769,5 +1801,7 @@ void audioListenModeFromScriptValue(const QScriptValue& object, AudioListenerMod
 
 QScriptValue driveKeysToScriptValue(QScriptEngine* engine, const MyAvatar::DriveKeys& driveKeys);
 void driveKeysFromScriptValue(const QScriptValue& object, MyAvatar::DriveKeys& driveKeys);
+
+bool isWearableEntity(const EntityItemPointer& entity);
 
 #endif // hifi_MyAvatar_h

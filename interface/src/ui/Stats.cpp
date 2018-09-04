@@ -26,6 +26,7 @@
 #include <OffscreenUi.h>
 #include <PerfStat.h>
 #include <plugins/DisplayPlugin.h>
+#include <PickManager.h>
 
 #include <gl/Context.h>
 
@@ -121,6 +122,7 @@ void Stats::updateStats(bool force) {
     auto avatarManager = DependencyManager::get<AvatarManager>();
     // we need to take one avatar out so we don't include ourselves
     STAT_UPDATE(avatarCount, avatarManager->size() - 1);
+    STAT_UPDATE(physicsObjectCount, qApp->getNumCollisionObjects());
     STAT_UPDATE(updatedAvatarCount, avatarManager->getNumAvatarsUpdated());
     STAT_UPDATE(notUpdatedAvatarCount, avatarManager->getNumAvatarsNotUpdated());
     STAT_UPDATE(serverCount, (int)nodeList->size());
@@ -145,6 +147,20 @@ void Stats::updateStats(bool force) {
         STAT_UPDATE(presentdroprate, -1);
     }
     STAT_UPDATE(gameLoopRate, (int)qApp->getGameLoopRate());
+
+    auto pickManager = DependencyManager::get<PickManager>();
+    if (pickManager && (_expanded || force)) {
+        std::vector<int> totalPicks = pickManager->getTotalPickCounts();
+        STAT_UPDATE(stylusPicksCount, totalPicks[PickQuery::Stylus]);
+        STAT_UPDATE(rayPicksCount, totalPicks[PickQuery::Ray]);
+        STAT_UPDATE(parabolaPicksCount, totalPicks[PickQuery::Parabola]);
+        STAT_UPDATE(collisionPicksCount, totalPicks[PickQuery::Collision]);
+        std::vector<QVector4D> updatedPicks = pickManager->getUpdatedPickCounts();
+        STAT_UPDATE(stylusPicksUpdated, updatedPicks[PickQuery::Stylus]);
+        STAT_UPDATE(rayPicksUpdated, updatedPicks[PickQuery::Ray]);
+        STAT_UPDATE(parabolaPicksUpdated, updatedPicks[PickQuery::Parabola]);
+        STAT_UPDATE(collisionPicksUpdated, updatedPicks[PickQuery::Collision]);
+    }
 
     auto bandwidthRecorder = DependencyManager::get<BandwidthRecorder>();
     STAT_UPDATE(packetInCount, (int)bandwidthRecorder->getCachedTotalAverageInputPacketsPerSecond());
@@ -174,7 +190,7 @@ void Stats::updateStats(bool force) {
     int octreeServerCount = 0;
     int pingOctreeMax = 0;
     int totalEntityKbps = 0;
-    nodeList->eachNode([&](const SharedNodePointer& node) {
+    nodeList->eachNode([&totalPingOctree, &totalEntityKbps, &octreeServerCount, &pingOctreeMax](const SharedNodePointer& node) {
         // TODO: this should also support entities
         if (node->getType() == NodeType::EntityServer) {
             totalPingOctree += node->getPingMs();
@@ -219,7 +235,7 @@ void Stats::updateStats(bool force) {
         STAT_UPDATE_FLOAT(myAvatarSendRate, avatarManager->getMyAvatarSendRate(), 0.1f);
 
         SharedNodePointer audioMixerNode = nodeList->soloNodeOfType(NodeType::AudioMixer);
-        auto audioClient = DependencyManager::get<AudioClient>();
+        auto audioClient = DependencyManager::get<AudioClient>().data();
         if (audioMixerNode || force) {
             STAT_UPDATE(audioMixerKbps, (int)roundf(
                 bandwidthRecorder->getAverageInputKilobitsPerSecond(NodeType::AudioMixer) +
@@ -285,7 +301,7 @@ void Stats::updateStats(bool force) {
         //    downloads << (int)(resource->getProgress() * 100.0f) << "% ";
         //}
         //downloads << "(" <<  << " pending)";
-    } // expanded avatar column
+    }
 
     // Fourth column, octree stats
     int serverCount = 0;
