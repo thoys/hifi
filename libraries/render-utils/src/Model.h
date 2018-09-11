@@ -347,6 +347,9 @@ public:
 
     bool areBlendedVertexBuffersInitialized(int index) { return _blendedVertexBuffersInitialized; }
 
+    static int _instances;
+    int _instance;
+
 public slots:
     void loadURLFinished(bool success);
 

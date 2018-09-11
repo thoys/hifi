@@ -48,8 +48,11 @@ int normalTypeVecTypeId = qRegisterMetaType<QVector<NormalType>>("QVector<Normal
 float Model::FAKE_DIMENSION_PLACEHOLDER = -1.0f;
 #define HTTP_INVALID_COM "http://invalid.com"
 
+int Model::_instances = 0;
+
 Model::Model(QObject* parent, SpatiallyNestable* spatiallyNestableOverride) :
     QObject(parent),
+    _instance(_instances++),
     _renderGeometry(),
     _renderWatcher(_renderGeometry),
     _spatiallyNestableOverride(spatiallyNestableOverride),
@@ -71,6 +74,8 @@ Model::Model(QObject* parent, SpatiallyNestable* spatiallyNestableOverride) :
     if (_viewState) {
         moveToThread(_viewState->getMainThread());
     }
+
+    qDebug() << "Model instance" << _instance;
 
     setSnapModelToRegistrationPoint(true, glm::vec3(0.5f));
 
@@ -1298,18 +1303,19 @@ Blender::Blender(ModelPointer model, int blendNumber, const Geometry::WeakPointe
 
 void Blender::run() {
     DETAILED_PROFILE_RANGE_EX(simulation_animation, __FUNCTION__, 0xFFFF0000, 0, { { "url", _model->getURL().toString() } });
+    qDebug() << "Blender run for model" << _model->_instance << "url" << _model->getURL().toString();
     QVector<glm::vec3> vertices;
     QVector<NormalType> normalsAndTangents;
     if (_model) {
         int offset = 0;
         int normalsAndTangentsOffset = 0;
         foreach (const FBXMesh& mesh, _meshes) {
-            if (mesh.blendshapes.isEmpty()) {
+            if (mesh.blendshapes.isEmpty() || mesh.normalsAndTangents.isEmpty()) {
                 continue;
             }
-
             vertices += mesh.vertices;
             normalsAndTangents += mesh.normalsAndTangents;
+            qDebug() << "added" << mesh.normalsAndTangents.size();
             glm::vec3* meshVertices = vertices.data() + offset;
             NormalType* meshNormalsAndTangents = normalsAndTangents.data() + normalsAndTangentsOffset;
             offset += mesh.vertices.size();
@@ -1352,10 +1358,18 @@ void Blender::run() {
         }
     }
     // post the result to the ModelBlender, which will dispatch to the model if still alive
+    qDebug() << "normalsAndTangetsTotal for" << _model->_instance << "=" << normalsAndTangents.size();
+    qDebug() << "invokeMethod setBlendedVertices for model" << _model->_instance;
+    if (normalsAndTangents.isEmpty()) {
+        return;
+    }
+
     QMetaObject::invokeMethod(DependencyManager::get<ModelBlender>().data(), "setBlendedVertices",
                               Q_ARG(ModelPointer, _model), Q_ARG(int, _blendNumber),
                               Q_ARG(const Geometry::WeakPointer&, _geometry), Q_ARG(const QVector<glm::vec3>&, vertices),
                               Q_ARG(const QVector<NormalType>&, normalsAndTangents));
+    qDebug() << "Done blender run for model" << _model->_instance;
+    
 }
 
 void Model::setScaleToFit(bool scaleToFit, const glm::vec3& dimensions, bool forceRescale) {
@@ -1601,7 +1615,7 @@ const render::ItemIDs& Model::fetchRenderItemIDs() const {
 void Model::initializeBlendshapes(const FBXMesh& mesh, int index) {
     QVector<NormalType> normalsAndTangents;
     normalsAndTangents.resize(2 * mesh.normals.size());
-
+    qDebug() << "initializeBlendshapes" << _instance;
     // Interleave normals and tangents
     // Parallel version for performance
     tbb::parallel_for(tbb::blocked_range<int>(0, mesh.normals.size()), [&](const tbb::blocked_range<int>& range) {
@@ -1633,6 +1647,7 @@ void Model::initializeBlendshapes(const FBXMesh& mesh, int index) {
     _blendedVertexBuffers[index]->setSubData(verticesSize, normalsAndTangents.size() * sizeof(NormalType), (const gpu::Byte*) normalsAndTangents.data());
     mesh.normalsAndTangents = normalsAndTangents;
     _blendedVertexBuffersInitialized = true;
+    qDebug() << "done initializeBlendshapes" << _instance;
 }
 
 void Model::createRenderItemSet() {
