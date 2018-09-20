@@ -145,6 +145,9 @@ public:
 
     QString getFilename() const;
 
+    Q_INVOKABLE bool getStrictMode() { return _strictMode; }
+    Q_INVOKABLE void setStrictMode(bool strict) { _strictMode = strict; }
+
     /**jsdoc
      * Stop the current script.
      * @function Script.stop
@@ -793,6 +796,7 @@ protected:
     ConsoleScriptingInterface _consoleScriptingInterface;
     std::atomic<bool> _isUserLoaded { false };
     bool _isReloading { false };
+    bool _strictMode { false };
 
     std::atomic<bool> _quitWhenFinished;
 

@@ -117,7 +117,7 @@ public:
  *     clear keyboard focus.
  */
 /// handles scripting of Entity commands from JS passed to assigned clients
-class EntityScriptingInterface : public OctreeScriptingInterface, public Dependency  {
+class EntityScriptingInterface : public OctreeScriptingInterface, public Dependency, protected QScriptable {
     Q_OBJECT
 
     Q_PROPERTY(QUuid keyboardFocusEntity READ getKeyboardFocusEntity WRITE setKeyboardFocusEntity)
@@ -149,8 +149,11 @@ public:
         const QVector<EntityItemID>& entityIdsToInclude, const QVector<EntityItemID>& entityIdsToDiscard,
         bool visibleOnly, bool collidableOnly);
 
+    static QScriptValue getMultipleEntityPropertiesFinal(QScriptContext* context, QScriptEngine* engine);
+    /*Q_INVOKABLE*/ QScriptValue getMultipleEntityPropertiesFinalInternal(QScriptEngine* engine, QVector<QUuid> entityIDs, const QScriptValue& extendedDesiredProperties);
 public slots:
 
+    Q_INVOKABLE QScriptValue createABunchOfQtObjects();
     /**jsdoc
      * Check whether or not you can change the <code>locked</code> property of entities. Locked entities have their 
      * <code>locked</code> property set to <code>true</code> and cannot be edited or deleted. Whether or not you can change 
@@ -270,7 +273,19 @@ public slots:
      * print("Entity color: " + JSON.stringify(properties.color));
      */
     Q_INVOKABLE EntityItemProperties getEntityProperties(QUuid entityID);
-    Q_INVOKABLE EntityItemProperties getEntityProperties(QUuid identity, EntityPropertyFlags desiredProperties);
+    Q_INVOKABLE EntityItemProperties getEntityProperties(QUuid entityID, EntityPropertyFlags desiredProperties);
+
+    //Q_INVOKABLE QScriptValue getMultipleEntityPropertiesFinal(QVector<QUuid> entityIDs);
+    // static QScriptValue getMultipleEntityPropertiesFinal(QScriptContext* context, QScriptEngine* engine);
+    // /*Q_INVOKABLE*/ QScriptValue getMultipleEntityPropertiesFinalInternal(QScriptEngine* engine, QVector<QUuid> entityIDs, const QScriptValue& extendedDesiredProperties);
+    Q_INVOKABLE QVector<EntityItemProperties> getMultipleEntityProperties(QVector<QUuid> entityIDs);
+    
+    QVector<EntityItemProperties> getMultipleEntityProperties(QVector<QUuid> entityIDs, EntityPropertyFlags desiredProperties);
+    Q_INVOKABLE QVector<EntityItemProperties> getMultipleEntityPropertiesFreeLock(QVector<QUuid> identities, EntityPropertyFlags desiredProperties);
+    Q_INVOKABLE QVector<EntityItemProperties> getMultipleEntityPropertiesFreeLockAmount(QVector<QUuid> identities, EntityPropertyFlags desiredProperties, int lockAmount);
+    Q_INVOKABLE QScriptValue getMultipleEntityPropertiesConvertBeforeReturn(QVector<QUuid> identities, EntityPropertyFlags desiredProperties);
+    Q_INVOKABLE QScriptValue getMultipleEntityPropertiesManual(QVector<QUuid> identities, EntityPropertyFlags desiredProperties);
+    Q_INVOKABLE QScriptValue getMultipleEntityPropertiesManualConstants(QVector<QUuid> identities, EntityPropertyFlags desiredProperties);
 
     /**jsdoc
      * Update an entity with specified properties.

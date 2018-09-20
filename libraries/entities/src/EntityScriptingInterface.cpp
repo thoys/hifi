@@ -42,7 +42,7 @@ const QString GRABBABLE_USER_DATA = "{\"grabbableKey\":{\"grabbable\":true}}";
 const QString NOT_GRABBABLE_USER_DATA = "{\"grabbableKey\":{\"grabbable\":false}}";
 
 EntityScriptingInterface::EntityScriptingInterface(bool bidOnSimulationOwnership) :
-    _entityTree(NULL),
+    _entityTree(nullptr),
     _bidOnSimulationOwnership(bidOnSimulationOwnership)
 {
     auto nodeList = DependencyManager::get<NodeList>();
@@ -352,19 +352,19 @@ QUuid EntityScriptingInterface::cloneEntity(QUuid entityIDToClone) {
     }
 }
 
-EntityItemProperties EntityScriptingInterface::getEntityProperties(QUuid identity) {
-    EntityPropertyFlags noSpecificProperties;
-    return getEntityProperties(identity, noSpecificProperties);
+EntityItemProperties EntityScriptingInterface::getEntityProperties(QUuid entityID) {
+    const EntityPropertyFlags noSpecificProperties;
+    return getEntityProperties(entityID, noSpecificProperties);
 }
 
-EntityItemProperties EntityScriptingInterface::getEntityProperties(QUuid identity, EntityPropertyFlags desiredProperties) {
+EntityItemProperties EntityScriptingInterface::getEntityProperties(QUuid entityID, EntityPropertyFlags desiredProperties) {
     PROFILE_RANGE(script_entities, __FUNCTION__);
 
     bool scalesWithParent { false };
     EntityItemProperties results;
     if (_entityTree) {
         _entityTree->withReadLock([&] {
-            EntityItemPointer entity = _entityTree->findEntityByEntityItemID(EntityItemID(identity));
+            EntityItemPointer entity = _entityTree->findEntityByEntityItemID(EntityItemID(entityID));
             if (entity) {
                 scalesWithParent = entity->getScalesWithParent();
                 if (desiredProperties.getHasProperty(PROP_POSITION) ||
@@ -398,6 +398,637 @@ EntityItemProperties EntityScriptingInterface::getEntityProperties(QUuid identit
 
     return convertPropertiesToScriptSemantics(results, scalesWithParent);
 }
+
+QVector<EntityItemProperties> EntityScriptingInterface::getMultipleEntityProperties(QVector<QUuid> entityIDs) {
+    const EntityPropertyFlags noSpecificProperties;
+    return getMultipleEntityProperties(entityIDs, noSpecificProperties);
+}
+
+//QScriptValue EntityScriptingInterface::getMultipleEntityPropertiesFinal(QVector<QUuid> entityIDs) {
+//    return getMultipleEntityPropertiesFinal(entityIDs, engine()->undefinedValue());
+//}
+
+struct EntityPropertiesResult {
+    EntityPropertiesResult(const EntityItemProperties& properties, bool scalesWithParent) :
+        properties(properties),
+        scalesWithParent(scalesWithParent) {
+    }
+    EntityPropertiesResult() = default;
+    EntityItemProperties properties;
+    bool scalesWithParent{ false };
+};
+
+QScriptValue EntityScriptingInterface::getMultipleEntityPropertiesFinal(QScriptContext* context, QScriptEngine* engine) {
+    const int ARGUMENT_ENTITY_IDS = 0;
+    const int ARGUMENT_EXTENDED_DESIRED_PROPERTIES = 1;
+
+    auto entityScriptingInterface = DependencyManager::get<EntityScriptingInterface>();
+    auto entityIDs = qScriptValueToValue<QVector<QUuid>>(context->argument(ARGUMENT_ENTITY_IDS));
+    return entityScriptingInterface->getMultipleEntityPropertiesFinalInternal(engine, entityIDs, context->argument(ARGUMENT_EXTENDED_DESIRED_PROPERTIES));
+}
+
+QScriptValue EntityScriptingInterface::getMultipleEntityPropertiesFinalInternal(QScriptEngine* engine, QVector<QUuid> entityIDs, const QScriptValue& extendedDesiredProperties) {
+    PROFILE_RANGE(script_entities, __FUNCTION__);
+    //extendedDesiredProperties.engine()
+    //const auto currentEngine = engine();
+
+    EntityPsuedoPropertyFlags psuedoPropertyFlags;
+    const auto readExtendedPropertyStringValue = [&](QScriptValue extendedProperty) {
+        const auto extendedPropertyString = extendedProperty.toString();
+        if (extendedPropertyString == QString("id")) {
+            psuedoPropertyFlags |= EntityPsuedoPropertyFlag::id;
+        } else if (extendedPropertyString == QString("type")) {
+            psuedoPropertyFlags |= EntityPsuedoPropertyFlag::type;
+        } else if (extendedPropertyString == QString("created")) {
+            psuedoPropertyFlags |= EntityPsuedoPropertyFlag::created;
+        } else if (extendedPropertyString == QString("age")) {
+            psuedoPropertyFlags |= EntityPsuedoPropertyFlag::age;
+        } else if (extendedPropertyString == QString("ageAsText")) {
+            psuedoPropertyFlags |= EntityPsuedoPropertyFlag::ageAsText;
+        } else if (extendedPropertyString == QString("lastEdited")) {
+            psuedoPropertyFlags |= EntityPsuedoPropertyFlag::lastEdited;
+        } else if (extendedPropertyString == QString("boundingBox")) {
+            psuedoPropertyFlags |= EntityPsuedoPropertyFlag::boundingBox;
+        } else if (extendedPropertyString == QString("originalTextures")) {
+            psuedoPropertyFlags |= EntityPsuedoPropertyFlag::originalTextures;
+        } else if (extendedPropertyString == QString("renderInfo")) {
+            psuedoPropertyFlags |= EntityPsuedoPropertyFlag::renderInfo;
+        } else if (extendedPropertyString == QString("clientOnly")) {
+            psuedoPropertyFlags |= EntityPsuedoPropertyFlag::clientOnly;
+        } else if (extendedPropertyString == QString("owningAvatarID")) {
+            psuedoPropertyFlags |= EntityPsuedoPropertyFlag::owningAvatarID;
+        }
+    };
+
+    if (extendedDesiredProperties.isString()) {
+        readExtendedPropertyStringValue(extendedDesiredProperties);
+        psuedoPropertyFlags |= EntityPsuedoPropertyFlag::flagsActive;
+    } else if (extendedDesiredProperties.isArray()) {
+        const quint32 length = extendedDesiredProperties.property("length").toInt32();
+        for (quint32 i = 0; i < length; i++) {
+            readExtendedPropertyStringValue(extendedDesiredProperties.property(i));
+        }
+        psuedoPropertyFlags |= EntityPsuedoPropertyFlag::flagsActive;
+    }
+
+    EntityPropertyFlags desiredProperties = qScriptValueToValue<EntityPropertyFlags>(extendedDesiredProperties);
+    bool needsScriptSymantics = desiredProperties.getHasProperty(PROP_POSITION) ||
+        desiredProperties.getHasProperty(PROP_ROTATION) ||
+        desiredProperties.getHasProperty(PROP_LOCAL_POSITION) ||
+        desiredProperties.getHasProperty(PROP_LOCAL_ROTATION) ||
+        desiredProperties.getHasProperty(PROP_LOCAL_VELOCITY) ||
+        desiredProperties.getHasProperty(PROP_LOCAL_ANGULAR_VELOCITY) ||
+        desiredProperties.getHasProperty(PROP_LOCAL_DIMENSIONS);
+    if (needsScriptSymantics) {
+        // if we are explicitly getting position or rotation, we need parent information to make sense of them.
+        desiredProperties.setHasProperty(PROP_PARENT_ID);
+        desiredProperties.setHasProperty(PROP_PARENT_JOINT_INDEX);
+    }
+    QVector<EntityPropertiesResult> resultProperties;
+    if (_entityTree) {
+        PROFILE_RANGE(script_entities, "EntityScriptingInterface::getMultipleEntityProperties>Obtaining Properties");
+        int i = 0;
+        const int lockAmount = 500;
+        int size = entityIDs.size();
+        while (i < size) {
+            _entityTree->withReadLock([&] {
+                for (int j = 0; j < lockAmount && i < size; ++i, ++j) {
+                    const auto& entityID = entityIDs.at(i);
+                    const EntityItemPointer entity = _entityTree->findEntityByEntityItemID(EntityItemID(entityID));
+                    if (entity) {
+                        if (!psuedoPropertyFlags && desiredProperties.isEmpty()) {
+                            // these are left out of EntityItem::getEntityProperties so that localPosition and localRotation
+                            // don't end up in json saves, etc.  We still want them here, though.
+                            EncodeBitstreamParams params; // unknown
+                            desiredProperties = entity->getEntityProperties(params);
+                            desiredProperties.setHasProperty(PROP_LOCAL_POSITION);
+                            desiredProperties.setHasProperty(PROP_LOCAL_ROTATION);
+                            desiredProperties.setHasProperty(PROP_LOCAL_VELOCITY);
+                            desiredProperties.setHasProperty(PROP_LOCAL_ANGULAR_VELOCITY);
+                            desiredProperties.setHasProperty(PROP_LOCAL_DIMENSIONS);
+                            psuedoPropertyFlags = EntityPsuedoPropertyFlag::all;
+                            needsScriptSymantics = true;
+                        }
+
+                        auto properties = entity->getProperties(desiredProperties, true);
+                        EntityPropertiesResult result(properties, entity->getScalesWithParent());
+                        resultProperties.append(result);
+                    }
+                }
+            });
+        }
+    }
+    QScriptValue finalResult = engine->newArray(resultProperties.size());
+    quint32 i = 0;
+    {
+        if (needsScriptSymantics) {            
+            PROFILE_RANGE(script_entities, "EntityScriptingInterface::getMultipleEntityProperties>Script Semantics");
+            foreach(auto result, resultProperties) {
+                finalResult.setProperty(i++, convertPropertiesToScriptSemantics(result.properties, result.scalesWithParent)
+                    .copyToScriptValue(engine, false, false, false, psuedoPropertyFlags));
+            }
+        } else {
+            PROFILE_RANGE(script_entities, "EntityScriptingInterface::getMultipleEntityProperties>Skip Script Semantics");
+            foreach(auto result, resultProperties) {
+                finalResult.setProperty(i++, result.properties.copyToScriptValue(engine, false, false, false, psuedoPropertyFlags));
+            }
+        }
+    }
+    return finalResult;
+}
+
+QVector<EntityItemProperties> EntityScriptingInterface::getMultipleEntityProperties(QVector<QUuid> identities, EntityPropertyFlags desiredProperties) {
+    PROFILE_RANGE(script_entities, __FUNCTION__);
+
+    const auto currentEngine = engine();
+
+    //bool scalesWithParent{ false };
+    //EntityItemProperties results;
+    QVector<EntityPropertiesResult> resultProperties;
+    if (_entityTree) {
+        PROFILE_RANGE(script_entities, "EntityScriptingInterface::getMultipleEntityProperties>Obtaining Properties");
+        _entityTree->withReadLock([&] {
+            foreach(const auto& identity, identities) {
+
+                EntityItemPointer entity;
+                {
+                  //  PROFILE_RANGE(script_entities, "EntityScriptingInterface::getMultipleEntityProperties>findEntityByEntityItemID");
+                    entity = _entityTree->findEntityByEntityItemID(EntityItemID(identity));
+                }
+                if (entity) {
+                    EntityPropertiesResult result;
+                    result.scalesWithParent = entity->getScalesWithParent();
+                    if (desiredProperties.getHasProperty(PROP_POSITION) ||
+                        desiredProperties.getHasProperty(PROP_ROTATION) ||
+                        desiredProperties.getHasProperty(PROP_LOCAL_POSITION) ||
+                        desiredProperties.getHasProperty(PROP_LOCAL_ROTATION) ||
+                        desiredProperties.getHasProperty(PROP_LOCAL_VELOCITY) ||
+                        desiredProperties.getHasProperty(PROP_LOCAL_ANGULAR_VELOCITY) ||
+                        desiredProperties.getHasProperty(PROP_LOCAL_DIMENSIONS)) {
+                        // if we are explicitly getting position or rotation, we need parent information to make sense of them.
+                        desiredProperties.setHasProperty(PROP_PARENT_ID);
+                        desiredProperties.setHasProperty(PROP_PARENT_JOINT_INDEX);
+                    }
+
+                    if (desiredProperties.isEmpty()) {
+                        // these are left out of EntityItem::getEntityProperties so that localPosition and localRotation
+                        // don't end up in json saves, etc.  We still want them here, though.
+                        EncodeBitstreamParams params; // unknown
+                        desiredProperties = entity->getEntityProperties(params);
+                        desiredProperties.setHasProperty(PROP_LOCAL_POSITION);
+                        desiredProperties.setHasProperty(PROP_LOCAL_ROTATION);
+                        desiredProperties.setHasProperty(PROP_LOCAL_VELOCITY);
+                        desiredProperties.setHasProperty(PROP_LOCAL_ANGULAR_VELOCITY);
+                        desiredProperties.setHasProperty(PROP_LOCAL_DIMENSIONS);
+                    }
+                    {
+                      //  PROFILE_RANGE(script_entities, "EntityScriptingInterface::getMultipleEntityProperties>getProperties");
+                        result.properties = entity->getProperties(desiredProperties);
+                    }
+                    resultProperties.append(result);
+                }
+            }
+        });
+    }
+
+    QVector<EntityItemProperties> finalResult;
+    {
+        PROFILE_RANGE(script_entities, "EntityScriptingInterface::getMultipleEntityProperties>Script Semantics");
+        foreach(auto result, resultProperties) {
+            finalResult.append(convertPropertiesToScriptSemantics(result.properties, result.scalesWithParent));
+        }
+    }
+
+    return finalResult;
+}
+
+QVector<EntityItemProperties> EntityScriptingInterface::getMultipleEntityPropertiesFreeLock(QVector<QUuid> identities, EntityPropertyFlags desiredProperties) {
+    PROFILE_RANGE(script_entities, __FUNCTION__);
+
+    const auto currentEngine = engine();
+
+    //bool scalesWithParent{ false };
+    //EntityItemProperties results;
+    QVector<EntityPropertiesResult> resultProperties;
+    if (_entityTree) {
+        PROFILE_RANGE(script_entities, "EntityScriptingInterface::getMultipleEntityProperties>Obtaining Properties");
+        
+        foreach(const auto& identity, identities) {
+            _entityTree->withReadLock([&] {
+
+                EntityItemPointer entity;
+                {
+                    //  PROFILE_RANGE(script_entities, "EntityScriptingInterface::getMultipleEntityProperties>findEntityByEntityItemID");
+                    entity = _entityTree->findEntityByEntityItemID(EntityItemID(identity));
+                }
+                if (entity) {
+                    EntityPropertiesResult result;
+                    result.scalesWithParent = entity->getScalesWithParent();
+                    if (desiredProperties.getHasProperty(PROP_POSITION) ||
+                        desiredProperties.getHasProperty(PROP_ROTATION) ||
+                        desiredProperties.getHasProperty(PROP_LOCAL_POSITION) ||
+                        desiredProperties.getHasProperty(PROP_LOCAL_ROTATION) ||
+                        desiredProperties.getHasProperty(PROP_LOCAL_VELOCITY) ||
+                        desiredProperties.getHasProperty(PROP_LOCAL_ANGULAR_VELOCITY) ||
+                        desiredProperties.getHasProperty(PROP_LOCAL_DIMENSIONS)) {
+                        // if we are explicitly getting position or rotation, we need parent information to make sense of them.
+                        desiredProperties.setHasProperty(PROP_PARENT_ID);
+                        desiredProperties.setHasProperty(PROP_PARENT_JOINT_INDEX);
+                    }
+
+                    if (desiredProperties.isEmpty()) {
+                        // these are left out of EntityItem::getEntityProperties so that localPosition and localRotation
+                        // don't end up in json saves, etc.  We still want them here, though.
+                        EncodeBitstreamParams params; // unknown
+                        desiredProperties = entity->getEntityProperties(params);
+                        desiredProperties.setHasProperty(PROP_LOCAL_POSITION);
+                        desiredProperties.setHasProperty(PROP_LOCAL_ROTATION);
+                        desiredProperties.setHasProperty(PROP_LOCAL_VELOCITY);
+                        desiredProperties.setHasProperty(PROP_LOCAL_ANGULAR_VELOCITY);
+                        desiredProperties.setHasProperty(PROP_LOCAL_DIMENSIONS);
+                    }
+                    {
+                        //  PROFILE_RANGE(script_entities, "EntityScriptingInterface::getMultipleEntityProperties>getProperties");
+                        result.properties = entity->getProperties(desiredProperties);
+                    }
+                    resultProperties.append(result);
+                }
+            });
+        }
+    }
+
+    QVector<EntityItemProperties> finalResult;
+    {
+        PROFILE_RANGE(script_entities, "EntityScriptingInterface::getMultipleEntityProperties>Script Semantics");
+        foreach(auto result, resultProperties) {
+            finalResult.append(convertPropertiesToScriptSemantics(result.properties, result.scalesWithParent));
+        }
+    }
+
+    return finalResult;
+}
+
+QVector<EntityItemProperties> EntityScriptingInterface::getMultipleEntityPropertiesFreeLockAmount(QVector<QUuid> identities, EntityPropertyFlags desiredProperties, int lockAmount) {
+    PROFILE_RANGE(script_entities, __FUNCTION__);
+
+    const auto currentEngine = engine();
+
+    //bool scalesWithParent{ false };
+    //EntityItemProperties results;
+    QVector<EntityPropertiesResult> resultProperties;
+    if (_entityTree) {
+        PROFILE_RANGE(script_entities, "EntityScriptingInterface::getMultipleEntityProperties>Obtaining Properties");
+        int i = 0;
+        int size = identities.size();
+        while (i < size) {
+            _entityTree->withReadLock([&] {
+                for (int j = 0; j < lockAmount && i < size; ++i, ++j) {
+                    EntityItemPointer entity;
+                    const auto& identity = identities.at(i);
+                    {
+                        //  PROFILE_RANGE(script_entities, "EntityScriptingInterface::getMultipleEntityProperties>findEntityByEntityItemID");
+                        entity = _entityTree->findEntityByEntityItemID(EntityItemID(identity));
+                    }
+                    if (entity) {
+                        EntityPropertiesResult result;
+                        result.scalesWithParent = entity->getScalesWithParent();
+                        if (desiredProperties.getHasProperty(PROP_POSITION) ||
+                            desiredProperties.getHasProperty(PROP_ROTATION) ||
+                            desiredProperties.getHasProperty(PROP_LOCAL_POSITION) ||
+                            desiredProperties.getHasProperty(PROP_LOCAL_ROTATION) ||
+                            desiredProperties.getHasProperty(PROP_LOCAL_VELOCITY) ||
+                            desiredProperties.getHasProperty(PROP_LOCAL_ANGULAR_VELOCITY) ||
+                            desiredProperties.getHasProperty(PROP_LOCAL_DIMENSIONS)) {
+                            // if we are explicitly getting position or rotation, we need parent information to make sense of them.
+                            desiredProperties.setHasProperty(PROP_PARENT_ID);
+                            desiredProperties.setHasProperty(PROP_PARENT_JOINT_INDEX);
+                        }
+
+                        if (desiredProperties.isEmpty()) {
+                            // these are left out of EntityItem::getEntityProperties so that localPosition and localRotation
+                            // don't end up in json saves, etc.  We still want them here, though.
+                            EncodeBitstreamParams params; // unknown
+                            desiredProperties = entity->getEntityProperties(params);
+                            desiredProperties.setHasProperty(PROP_LOCAL_POSITION);
+                            desiredProperties.setHasProperty(PROP_LOCAL_ROTATION);
+                            desiredProperties.setHasProperty(PROP_LOCAL_VELOCITY);
+                            desiredProperties.setHasProperty(PROP_LOCAL_ANGULAR_VELOCITY);
+                            desiredProperties.setHasProperty(PROP_LOCAL_DIMENSIONS);
+                        }
+                        {
+                            //  PROFILE_RANGE(script_entities, "EntityScriptingInterface::getMultipleEntityProperties>getProperties");
+                            result.properties = entity->getProperties(desiredProperties);
+                        }
+                        resultProperties.append(result);
+                    }
+                }
+            });
+        }
+    }
+
+    QVector<EntityItemProperties> finalResult;
+    {
+        PROFILE_RANGE(script_entities, "EntityScriptingInterface::getMultipleEntityProperties>Script Semantics");
+        foreach(auto result, resultProperties) {
+            finalResult.append(convertPropertiesToScriptSemantics(result.properties, result.scalesWithParent));
+        }
+    }
+
+    return finalResult;
+}
+
+QScriptValue EntityScriptingInterface::getMultipleEntityPropertiesConvertBeforeReturn(QVector<QUuid> identities, EntityPropertyFlags desiredProperties) {
+    PROFILE_RANGE(script_entities, __FUNCTION__);
+
+    const auto currentEngine = engine();
+
+    //bool scalesWithParent{ false };
+    //EntityItemProperties results;
+    QVector<EntityPropertiesResult> resultProperties;
+    if (_entityTree) {
+        PROFILE_RANGE(script_entities, "EntityScriptingInterface::getMultipleEntityProperties>Obtaining Properties");
+        _entityTree->withReadLock([&] {
+            foreach(const auto& identity, identities) {
+
+                EntityItemPointer entity;
+                {
+                    //  PROFILE_RANGE(script_entities, "EntityScriptingInterface::getMultipleEntityProperties>findEntityByEntityItemID");
+                    entity = _entityTree->findEntityByEntityItemID(EntityItemID(identity));
+                }
+                if (entity) {
+                    EntityPropertiesResult result;
+                    result.scalesWithParent = entity->getScalesWithParent();
+                    if (desiredProperties.getHasProperty(PROP_POSITION) ||
+                        desiredProperties.getHasProperty(PROP_ROTATION) ||
+                        desiredProperties.getHasProperty(PROP_LOCAL_POSITION) ||
+                        desiredProperties.getHasProperty(PROP_LOCAL_ROTATION) ||
+                        desiredProperties.getHasProperty(PROP_LOCAL_VELOCITY) ||
+                        desiredProperties.getHasProperty(PROP_LOCAL_ANGULAR_VELOCITY) ||
+                        desiredProperties.getHasProperty(PROP_LOCAL_DIMENSIONS)) {
+                        // if we are explicitly getting position or rotation, we need parent information to make sense of them.
+                        desiredProperties.setHasProperty(PROP_PARENT_ID);
+                        desiredProperties.setHasProperty(PROP_PARENT_JOINT_INDEX);
+                    }
+
+                    if (desiredProperties.isEmpty()) {
+                        // these are left out of EntityItem::getEntityProperties so that localPosition and localRotation
+                        // don't end up in json saves, etc.  We still want them here, though.
+                        EncodeBitstreamParams params; // unknown
+                        desiredProperties = entity->getEntityProperties(params);
+                        desiredProperties.setHasProperty(PROP_LOCAL_POSITION);
+                        desiredProperties.setHasProperty(PROP_LOCAL_ROTATION);
+                        desiredProperties.setHasProperty(PROP_LOCAL_VELOCITY);
+                        desiredProperties.setHasProperty(PROP_LOCAL_ANGULAR_VELOCITY);
+                        desiredProperties.setHasProperty(PROP_LOCAL_DIMENSIONS);
+                    }
+                    {
+                        //  PROFILE_RANGE(script_entities, "EntityScriptingInterface::getMultipleEntityProperties>getProperties");
+                        result.properties = entity->getProperties(desiredProperties);
+                    }
+                    resultProperties.append(result);
+                }
+            }
+        });
+    }
+
+    QVector<EntityItemProperties> finalResult;
+    {
+        PROFILE_RANGE(script_entities, "EntityScriptingInterface::getMultipleEntityProperties>Script Semantics");
+        foreach(auto result, resultProperties) {
+            finalResult.append(convertPropertiesToScriptSemantics(result.properties, result.scalesWithParent));
+        }
+    }
+
+    QScriptValue resultScriptValue;
+    {
+        PROFILE_RANGE(script_entities, "EntityScriptingInterface::getMultipleEntityProperties>Original script value conversion");
+        resultScriptValue = qScriptValueFromValue<QVector<EntityItemProperties>>(currentEngine, finalResult);
+    }
+    return resultScriptValue;
+}
+
+QScriptValue EntityScriptingInterface::getMultipleEntityPropertiesManual(QVector<QUuid> identities, EntityPropertyFlags desiredProperties) {
+    PROFILE_RANGE(script_entities, __FUNCTION__);
+
+    const auto currentEngine = engine();
+
+    //bool scalesWithParent{ false };
+    //EntityItemProperties results;
+    QVector<EntityPropertiesResult> resultProperties;
+    if (_entityTree) {
+        PROFILE_RANGE(script_entities, "EntityScriptingInterface::getMultipleEntityProperties>Obtaining Properties");
+        _entityTree->withReadLock([&] {
+            foreach(const auto& identity, identities) {
+
+                EntityItemPointer entity;
+                {
+                    //  PROFILE_RANGE(script_entities, "EntityScriptingInterface::getMultipleEntityProperties>findEntityByEntityItemID");
+                    entity = _entityTree->findEntityByEntityItemID(EntityItemID(identity));
+                }
+                if (entity) {
+                    EntityPropertiesResult result;
+                    result.scalesWithParent = entity->getScalesWithParent();
+                    if (desiredProperties.getHasProperty(PROP_POSITION) ||
+                        desiredProperties.getHasProperty(PROP_ROTATION) ||
+                        desiredProperties.getHasProperty(PROP_LOCAL_POSITION) ||
+                        desiredProperties.getHasProperty(PROP_LOCAL_ROTATION) ||
+                        desiredProperties.getHasProperty(PROP_LOCAL_VELOCITY) ||
+                        desiredProperties.getHasProperty(PROP_LOCAL_ANGULAR_VELOCITY) ||
+                        desiredProperties.getHasProperty(PROP_LOCAL_DIMENSIONS)) {
+                        // if we are explicitly getting position or rotation, we need parent information to make sense of them.
+                        desiredProperties.setHasProperty(PROP_PARENT_ID);
+                        desiredProperties.setHasProperty(PROP_PARENT_JOINT_INDEX);
+                    }
+
+                    if (desiredProperties.isEmpty()) {
+                        // these are left out of EntityItem::getEntityProperties so that localPosition and localRotation
+                        // don't end up in json saves, etc.  We still want them here, though.
+                        EncodeBitstreamParams params; // unknown
+                        desiredProperties = entity->getEntityProperties(params);
+                        desiredProperties.setHasProperty(PROP_LOCAL_POSITION);
+                        desiredProperties.setHasProperty(PROP_LOCAL_ROTATION);
+                        desiredProperties.setHasProperty(PROP_LOCAL_VELOCITY);
+                        desiredProperties.setHasProperty(PROP_LOCAL_ANGULAR_VELOCITY);
+                        desiredProperties.setHasProperty(PROP_LOCAL_DIMENSIONS);
+                    }
+                    {
+                        //  PROFILE_RANGE(script_entities, "EntityScriptingInterface::getMultipleEntityProperties>getProperties");
+                        result.properties = entity->getProperties(desiredProperties);
+                    }
+                    resultProperties.append(result);
+                }
+            }
+        });
+    }
+
+    QVector<EntityItemProperties> finalResult;
+    {
+        PROFILE_RANGE(script_entities, "EntityScriptingInterface::getMultipleEntityProperties>Script Semantics");
+        foreach(auto result, resultProperties) {
+            finalResult.append(convertPropertiesToScriptSemantics(result.properties, result.scalesWithParent));
+        }
+    }
+
+    QScriptValue resultScriptValue;
+    {
+        PROFILE_RANGE(script_entities, "EntityScriptingInterface::getMultipleEntityProperties>Manual properties");
+        /*
+         * {
+         *     "id": "{ed1f22b4-8ef0-4673-b2eb-fd3f7509615a}",
+         *     "type": "Box",
+         *     "created": "2018-09-05T20:08:46Z",
+         *     "age": 41.01816940307617,
+         *     "lastEdited": 1536178113997417,
+         *     "script": "",
+         *     "visible": true,
+         *     "locked": false,
+         *     "name": "",
+         *     "renderInfo": {},
+         *     "clientOnly": false,
+         *     "owningAvatarID": "{00000000-0000-0000-0000-000000000000}"
+         *   }
+         */
+        const uint count = identities.size();
+        resultScriptValue = currentEngine->newArray(count);
+        for (uint i = 0; i < count; i++) {
+            auto sampleProperty = currentEngine->newObject();
+            sampleProperty.setProperty("id", "{ed1f22b4-8ef0-4673-b2eb-fd3f7509615a}");
+            sampleProperty.setProperty("type", "Box");
+            sampleProperty.setProperty("created", "2018-09-05T20:08:46Z");
+            sampleProperty.setProperty("age", 41.01816940307617);
+            sampleProperty.setProperty("lastEdited", convertScriptValue(currentEngine, (quint64)1536178113997417));
+            sampleProperty.setProperty("script", "");
+            sampleProperty.setProperty("visible", true);
+            sampleProperty.setProperty("locked", false);
+            sampleProperty.setProperty("name", "");
+            sampleProperty.setProperty("renderInfo", currentEngine->newObject());
+            sampleProperty.setProperty("clientOnly", false);
+            sampleProperty.setProperty("owningAvatarID", "{00000000-0000-0000-0000-000000000000}");
+            resultScriptValue.setProperty(i, sampleProperty);
+        }
+    }
+    return resultScriptValue;
+}
+
+QScriptValue EntityScriptingInterface::getMultipleEntityPropertiesManualConstants(QVector<QUuid> identities, EntityPropertyFlags desiredProperties) {
+    PROFILE_RANGE(script_entities, __FUNCTION__);
+
+    const auto currentEngine = engine();
+
+    //bool scalesWithParent{ false };
+    //EntityItemProperties results;
+    QVector<EntityPropertiesResult> resultProperties;
+    if (_entityTree) {
+        PROFILE_RANGE(script_entities, "EntityScriptingInterface::getMultipleEntityProperties>Obtaining Properties");
+        _entityTree->withReadLock([&] {
+            foreach(const auto& identity, identities) {
+
+                EntityItemPointer entity;
+                {
+                    //  PROFILE_RANGE(script_entities, "EntityScriptingInterface::getMultipleEntityProperties>findEntityByEntityItemID");
+                    entity = _entityTree->findEntityByEntityItemID(EntityItemID(identity));
+                }
+                if (entity) {
+                    EntityPropertiesResult result;
+                    result.scalesWithParent = entity->getScalesWithParent();
+                    if (desiredProperties.getHasProperty(PROP_POSITION) ||
+                        desiredProperties.getHasProperty(PROP_ROTATION) ||
+                        desiredProperties.getHasProperty(PROP_LOCAL_POSITION) ||
+                        desiredProperties.getHasProperty(PROP_LOCAL_ROTATION) ||
+                        desiredProperties.getHasProperty(PROP_LOCAL_VELOCITY) ||
+                        desiredProperties.getHasProperty(PROP_LOCAL_ANGULAR_VELOCITY) ||
+                        desiredProperties.getHasProperty(PROP_LOCAL_DIMENSIONS)) {
+                        // if we are explicitly getting position or rotation, we need parent information to make sense of them.
+                        desiredProperties.setHasProperty(PROP_PARENT_ID);
+                        desiredProperties.setHasProperty(PROP_PARENT_JOINT_INDEX);
+                    }
+
+                    if (desiredProperties.isEmpty()) {
+                        // these are left out of EntityItem::getEntityProperties so that localPosition and localRotation
+                        // don't end up in json saves, etc.  We still want them here, though.
+                        EncodeBitstreamParams params; // unknown
+                        desiredProperties = entity->getEntityProperties(params);
+                        desiredProperties.setHasProperty(PROP_LOCAL_POSITION);
+                        desiredProperties.setHasProperty(PROP_LOCAL_ROTATION);
+                        desiredProperties.setHasProperty(PROP_LOCAL_VELOCITY);
+                        desiredProperties.setHasProperty(PROP_LOCAL_ANGULAR_VELOCITY);
+                        desiredProperties.setHasProperty(PROP_LOCAL_DIMENSIONS);
+                    }
+                    {
+                        //  PROFILE_RANGE(script_entities, "EntityScriptingInterface::getMultipleEntityProperties>getProperties");
+                        result.properties = entity->getProperties(desiredProperties);
+                    }
+                    resultProperties.append(result);
+                }
+            }
+        });
+    }
+
+    QVector<EntityItemProperties> finalResult;
+    {
+        PROFILE_RANGE(script_entities, "EntityScriptingInterface::getMultipleEntityProperties>Script Semantics");
+        foreach(auto result, resultProperties) {
+            finalResult.append(convertPropertiesToScriptSemantics(result.properties, result.scalesWithParent));
+        }
+    }
+
+    QScriptValue resultScriptValue;
+
+
+{
+    PROFILE_RANGE(script_entities, "EntityScriptingInterface::getMultipleEntityProperties>Manual properties with name cache");
+        /*
+        * {
+        *     "id": "{ed1f22b4-8ef0-4673-b2eb-fd3f7509615a}",
+        *     "type": "Box",
+        *     "created": "2018-09-05T20:08:46Z",
+        *     "age": 41.01816940307617,
+        *     "lastEdited": 1536178113997417,
+        *     "script": "",
+        *     "visible": true,
+        *     "locked": false,
+        *     "name": "",
+        *     "renderInfo": {},
+        *     "clientOnly": false,
+        *     "owningAvatarID": "{00000000-0000-0000-0000-000000000000}"
+        *   }
+        */
+        const QScriptString &idProperty = currentEngine->toStringHandle("id");
+        const QScriptString &typeProperty = currentEngine->toStringHandle("type");
+        const QScriptString &createdProperty = currentEngine->toStringHandle("created");
+        const QScriptString &ageProperty = currentEngine->toStringHandle("age");
+        const QScriptString &lastEditedProperty = currentEngine->toStringHandle("lastEdited");
+        const QScriptString &scriptProperty = currentEngine->toStringHandle("script");
+        const QScriptString &visibleProperty = currentEngine->toStringHandle("visible");
+        const QScriptString &lockedProperty = currentEngine->toStringHandle("locked");
+        const QScriptString &nameProperty = currentEngine->toStringHandle("name");
+        const QScriptString &renderInfoProperty = currentEngine->toStringHandle("renderInfo");
+        const QScriptString &clientOnlyProperty = currentEngine->toStringHandle("clientOnly");
+        const QScriptString &owningAvatarIDProperty = currentEngine->toStringHandle("owningAvatarID");
+
+        const uint count = identities.size();
+        resultScriptValue = currentEngine->newArray(count);
+        for (uint i = 0; i < count; i++) {
+            auto sampleProperty = currentEngine->newObject();
+            sampleProperty.setProperty(idProperty, "{ed1f22b4-8ef0-4673-b2eb-fd3f7509615a}");
+            sampleProperty.setProperty(typeProperty, "Box");
+            sampleProperty.setProperty(createdProperty, "2018-09-05T20:08:46Z");
+            sampleProperty.setProperty(ageProperty, 41.01816940307617);
+            sampleProperty.setProperty(lastEditedProperty, convertScriptValue(currentEngine, (quint64)1536178113997417));
+            sampleProperty.setProperty(scriptProperty, "");
+            sampleProperty.setProperty(visibleProperty, true);
+            sampleProperty.setProperty(lockedProperty, false);
+            sampleProperty.setProperty(nameProperty, "");
+            sampleProperty.setProperty(renderInfoProperty, currentEngine->newObject());
+            sampleProperty.setProperty(clientOnlyProperty, false);
+            sampleProperty.setProperty(owningAvatarIDProperty, "{00000000-0000-0000-0000-000000000000}");
+            resultScriptValue.setProperty(i, sampleProperty);
+        }
+    }
+
+    return resultScriptValue;
+}
+
 
 QUuid EntityScriptingInterface::editEntity(QUuid id, const EntityItemProperties& scriptSideProperties) {
     PROFILE_RANGE(script_entities, __FUNCTION__);
@@ -884,6 +1515,84 @@ ParabolaToEntityIntersectionResult EntityScriptingInterface::findParabolaInterse
     PROFILE_RANGE(script_entities, __FUNCTION__);
 
     return findParabolaIntersectionWorker(parabola, Octree::Lock, precisionPicking, entityIdsToInclude, entityIdsToDiscard, visibleOnly, collidableOnly);
+}
+
+QScriptValue EntityScriptingInterface::createABunchOfQtObjects() {
+    QScriptValue myList;
+    PROFILE_RANGE(script_entities, __FUNCTION__);
+    {
+        PROFILE_RANGE(script_entities, "name constant -> Test");
+        uint count = 10000;
+        auto currentEngine = engine();
+        const QScriptString &nameProperty = currentEngine->toStringHandle("name");
+        myList = currentEngine->newArray(count);
+        for (uint i = 0; i < count; i++) {
+            auto sampleProperty = currentEngine->newObject();
+            sampleProperty.setProperty(nameProperty, "Test");
+            myList.setProperty(i, sampleProperty);
+        }
+    }
+    {
+        PROFILE_RANGE(script_entities, "name constant inside loop -> Test");
+        uint count = 10000;
+        auto currentEngine = engine();
+
+        myList = currentEngine->newArray(count);
+        for (uint i = 0; i < count; i++) {
+            auto sampleProperty = currentEngine->newObject();
+            const QScriptString &nameProperty = currentEngine->toStringHandle("name");
+            sampleProperty.setProperty(nameProperty, "Test");
+            myList.setProperty(i, sampleProperty);
+        }
+    }
+    {
+        PROFILE_RANGE(script_entities, "name constant -> 1337");
+        uint count = 10000;
+        auto currentEngine = engine();
+        const QScriptString &nameProperty = currentEngine->toStringHandle("name");
+        myList = currentEngine->newArray(count);
+        for (uint i = 0; i < count; i++) {
+            auto sampleProperty = currentEngine->newObject();
+            sampleProperty.setProperty(nameProperty, 1337);
+            myList.setProperty(i, sampleProperty);
+        }
+    }
+    {
+        PROFILE_RANGE(script_entities, "name constant inside loop -> 1337");
+        uint count = 10000;
+        auto currentEngine = engine();
+
+        myList = currentEngine->newArray(count);
+        for (uint i = 0; i < count; i++) {
+            auto sampleProperty = currentEngine->newObject();
+            const QScriptString &nameProperty = currentEngine->toStringHandle("name");
+            sampleProperty.setProperty(nameProperty, 1337);
+            myList.setProperty(i, sampleProperty);
+        }
+    }
+    {
+        PROFILE_RANGE(script_entities, "7331 -> 1337");
+        uint count = 10000;
+        auto currentEngine = engine();
+        myList = currentEngine->newArray(count);
+        for (uint i = 0; i < count; i++) {
+            auto sampleProperty = currentEngine->newObject();
+            sampleProperty.setProperty(7331, 1337);
+            myList.setProperty(i, sampleProperty);
+        }
+    }
+    {
+        PROFILE_RANGE(script_entities, "name -> Test");
+        uint count = 10000;
+        auto currentEngine = engine();
+        myList = currentEngine->newArray(count);
+        for (uint i = 0; i < count; i++) {
+            auto sampleProperty = currentEngine->newObject();
+            sampleProperty.setProperty("name", "Test");
+            myList.setProperty(i, sampleProperty);
+        }
+    }
+    return myList;
 }
 
 ParabolaToEntityIntersectionResult EntityScriptingInterface::findParabolaIntersectionWorker(const PickParabola& parabola,

@@ -80,7 +80,7 @@
 
 #include <Profile.h>
 
-#include "../../midi/src/Midi.h"        // FIXME why won't a simpler include work?
+#include <Midi.h>
 #include "MIDIEvent.h"
 
 const QString ScriptEngine::_SETTINGS_ENABLE_EXTENDED_EXCEPTIONS {
@@ -651,6 +651,16 @@ void ScriptEngine::resetModuleCache(bool deleteScriptCache) {
     jsRequire.setProperty("cache", cache, READONLY_PROP_FLAGS);
 }
 
+QScriptValue EntityItemPropertiesToScriptValue(QScriptEngine* engine, const EntityItemProperties& properties) {
+    //PROFILE_RANGE(script_entities, __FUNCTION__);
+    bool strictMode = false;
+
+    const auto scriptEngine = qobject_cast<ScriptEngine*>(engine);
+    strictMode = /*properties.getStrictProperties() ||*/ scriptEngine->getStrictMode();
+    return properties.copyToScriptValue(engine, strictMode, false, strictMode);
+}
+
+
 void ScriptEngine::init() {
     if (_isInitialized) {
         return; // only initialize once
@@ -678,21 +688,22 @@ void ScriptEngine::init() {
     qScriptRegisterMetaType(this, AvatarEntityMapToScriptValue, AvatarEntityMapFromScriptValue);
     qScriptRegisterSequenceMetaType<QVector<QUuid>>(this);
     qScriptRegisterSequenceMetaType<QVector<EntityItemID>>(this);
+    qScriptRegisterSequenceMetaType<QVector<EntityItemProperties>>(this);
 
     qScriptRegisterSequenceMetaType<QVector<glm::vec2> >(this);
     qScriptRegisterSequenceMetaType<QVector<glm::quat> >(this);
     qScriptRegisterSequenceMetaType<QVector<QString> >(this);
 
     QScriptValue xmlHttpRequestConstructorValue = newFunction(XMLHttpRequestClass::constructor);
-    globalObject().setProperty("XMLHttpRequest", xmlHttpRequestConstructorValue);
+    globalObject().setProperty("XMLHttpRequest", xmlHttpRequestConstructorValue, READONLY_PROP_FLAGS);
 
     QScriptValue webSocketConstructorValue = newFunction(WebSocketClass::constructor);
-    globalObject().setProperty("WebSocket", webSocketConstructorValue);
+    globalObject().setProperty("WebSocket", webSocketConstructorValue, READONLY_PROP_FLAGS);
 
-    globalObject().setProperty("print", newFunction(debugPrint));
+    globalObject().setProperty("print", newFunction(debugPrint), READONLY_PROP_FLAGS);
 
     QScriptValue audioEffectOptionsConstructorValue = newFunction(AudioEffectOptions::constructor);
-    globalObject().setProperty("AudioEffectOptions", audioEffectOptionsConstructorValue);
+    globalObject().setProperty("AudioEffectOptions", audioEffectOptionsConstructorValue, READONLY_PROP_FLAGS);
 
     qScriptRegisterMetaType(this, injectorToScriptValue, injectorFromScriptValue);
     qScriptRegisterMetaType(this, inputControllerToScriptValue, inputControllerFromScriptValue);
@@ -721,6 +732,8 @@ void ScriptEngine::init() {
     registerGlobalObject("Midi", DependencyManager::get<Midi>().data());
 
     registerGlobalObject("Entities", entityScriptingInterface.data());
+    registerFunction("Entities", "getMultipleEntityPropertiesFinal", EntityScriptingInterface::getMultipleEntityPropertiesFinal);
+    // registerFunction("Entities", "getMultipleEntityPropertiesFinal", EntityScriptingInterface::getMultipleEntityPropertiesFinal, 2);
     registerGlobalObject("Quat", &_quatLibrary);
     registerGlobalObject("Vec3", &_vec3Library);
     registerGlobalObject("Mat4", &_mat4Library);
@@ -814,9 +827,9 @@ void ScriptEngine::registerGlobalObject(const QString& name, QObject* object) {
     if (!globalObject().property(name).isValid()) {
         if (object) {
             QScriptValue value = newQObject(object, QScriptEngine::QtOwnership, DEFAULT_QOBJECT_WRAP_OPTIONS);
-            globalObject().setProperty(name, value);
+            globalObject().setProperty(name, value, READONLY_PROP_FLAGS);
         } else {
-            globalObject().setProperty(name, QScriptValue());
+            globalObject().setProperty(name, QScriptValue(), READONLY_PROP_FLAGS);
         }
     }
 }
@@ -858,7 +871,7 @@ void ScriptEngine::registerFunction(const QString& parent, const QString& name, 
     QScriptValue object = globalObject().property(parent);
     if (object.isValid()) {
         QScriptValue scriptFun = newFunction(functionSignature, numArguments);
-        object.setProperty(name, scriptFun);
+        object.setProperty(name, scriptFun, READONLY_PROP_FLAGS);
     }
 }
 

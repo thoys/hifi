@@ -17,6 +17,7 @@
 
 #include "EntityItemID.h"
 #include <RegisteredMetaTypes.h>
+#include <Profile.h>
 
 #define APPEND_ENTITY_PROPERTY(P,V) \
         if (requestedProperties.getHasProperty(P)) {                \
@@ -128,9 +129,16 @@ inline QScriptValue convertScriptValue(QScriptEngine* e, const EntityItemID& v) 
 
 inline QScriptValue convertScriptValue(QScriptEngine* e, const AACube& v) { return aaCubeToScriptValue(e, v); }
 
+//#define PROFILE_PROPERTIES_ENABLED
 
+#ifdef PROFILE_PROPERTIES_ENABLED
+#define PROFILE_PROPERTY(n, p) PROFILE_RANGE(script_entities, n #p);
+#else
+#define PROFILE_PROPERTY(n, p)
+#endif
 
 #define COPY_GROUP_PROPERTY_TO_QSCRIPTVALUE(X,G,g,P,p) \
+    { PROFILE_PROPERTY("COPY_GROUP_PROPERTY_TO_QSCRIPTVALUE ", p); \
     if ((desiredProperties.isEmpty() || desiredProperties.getHasProperty(X)) && \
         (!skipDefaults || defaultEntityProperties.get##G().get##P() != get##P())) { \
         QScriptValue groupProperties = properties.property(#g); \
@@ -140,9 +148,10 @@ inline QScriptValue convertScriptValue(QScriptEngine* e, const AACube& v) { retu
         QScriptValue V = convertScriptValue(engine, get##P()); \
         groupProperties.setProperty(#p, V); \
         properties.setProperty(#g, groupProperties); \
-    }
+    }}
 
 #define COPY_GROUP_PROPERTY_TO_QSCRIPTVALUE_GETTER(X,G,g,P,p,M)                       \
+    { PROFILE_PROPERTY("COPY_GROUP_PROPERTY_TO_QSCRIPTVALUE_GETTER ", p); \
     if ((desiredProperties.isEmpty() || desiredProperties.getHasProperty(X)) &&       \
         (!skipDefaults || defaultEntityProperties.get##G().get##P() != get##P())) {   \
         QScriptValue groupProperties = properties.property(#g);                       \
@@ -152,38 +161,44 @@ inline QScriptValue convertScriptValue(QScriptEngine* e, const AACube& v) { retu
         QScriptValue V = convertScriptValue(engine, M());                             \
         groupProperties.setProperty(#p, V);                                           \
         properties.setProperty(#g, groupProperties);                                  \
-    }
+    }}
 
 #define COPY_PROPERTY_TO_QSCRIPTVALUE(p,P) \
-    if ((_desiredProperties.isEmpty() || _desiredProperties.getHasProperty(p)) && \
+    { PROFILE_PROPERTY("COPY_PROPERTY_TO_QSCRIPTVALUE ", p); \
+    if (((!psuedoPropertyFlagsButDesiredEmpty && _desiredProperties.isEmpty()) || _desiredProperties.getHasProperty(p)) && \
         (!skipDefaults || defaultEntityProperties._##P != _##P)) { \
         QScriptValue V = convertScriptValue(engine, _##P); \
         properties.setProperty(#P, V); \
-    }
+    }}
 
 #define COPY_PROPERTY_TO_QSCRIPTVALUE_GETTER_NO_SKIP(P, G) \
-    properties.setProperty(#P, G);
+    { PROFILE_PROPERTY("COPY_PROPERTY_TO_QSCRIPTVALUE_GETTER_NO_SKIP ", P); \
+    properties.setProperty(#P, G); \
+    }
 
 #define COPY_PROPERTY_TO_QSCRIPTVALUE_GETTER(p, P, G) \
-    if ((_desiredProperties.isEmpty() || _desiredProperties.getHasProperty(p)) && \
+    { PROFILE_PROPERTY("COPY_PROPERTY_TO_QSCRIPTVALUE_GETTER ", p); \
+    if (((!psuedoPropertyFlagsButDesiredEmpty && _desiredProperties.isEmpty()) || _desiredProperties.getHasProperty(p)) && \
         (!skipDefaults || defaultEntityProperties._##P != _##P)) { \
         QScriptValue V = convertScriptValue(engine, G); \
         properties.setProperty(#P, V); \
-    }
+    }}
 
 // same as COPY_PROPERTY_TO_QSCRIPTVALUE_GETTER but uses #X instead of #P in the setProperty() step
 #define COPY_PROXY_PROPERTY_TO_QSCRIPTVALUE_GETTER(p, P, X, G) \
-    if ((_desiredProperties.isEmpty() || _desiredProperties.getHasProperty(p)) && \
+    { PROFILE_PROPERTY("COPY_PROXY_PROPERTY_TO_QSCRIPTVALUE_GETTER ", p); \
+    if (((!psuedoPropertyFlagsButDesiredEmpty && _desiredProperties.isEmpty()) || _desiredProperties.getHasProperty(p)) && \
         (!skipDefaults || defaultEntityProperties._##P != _##P)) { \
         QScriptValue V = convertScriptValue(engine, G); \
         properties.setProperty(#X, V); \
-    }
+    }}
 
 #define COPY_PROPERTY_TO_QSCRIPTVALUE_GETTER_ALWAYS(P, G) \
+    { PROFILE_PROPERTY("COPY_PROPERTY_TO_QSCRIPTVALUE_GETTER_ALWAYS ", P); \
     if (!skipDefaults || defaultEntityProperties._##P != _##P) { \
         QScriptValue V = convertScriptValue(engine, G); \
         properties.setProperty(#P, V); \
-    }
+    }}
 
 typedef QVector<glm::vec3> qVectorVec3;
 typedef QVector<glm::quat> qVectorQuat;
