@@ -14,7 +14,7 @@ using System.Collections.Generic;
 
 class AvatarExporter : MonoBehaviour {
     // update version number for every PR that changes this file, also set updated version in README file
-    static readonly string AVATAR_EXPORTER_VERSION = "0.3.3";
+    static readonly string AVATAR_EXPORTER_VERSION = "0.3.3.1";
     
     static readonly float HIPS_GROUND_MIN_Y = 0.01f;
     static readonly float HIPS_SPINE_CHEST_MIN_SEPARATION = 0.001f;
@@ -596,6 +596,11 @@ class AvatarExporter : MonoBehaviour {
                          "please ensure those textures are copied to " + texturesDirectory;
         EditorUtility.DisplayDialog("Success!", successDialog, "Ok");
     }
+
+    // The High Fidelity FBX Serializer omits the colon based prefixes. This will make the jointnames compatible.
+    static string removeTypeFromJointname(string jointName) {
+        return jointName.Substring(jointName.IndexOf(':') + 1);
+    }
     
     static bool WriteFST(string exportFstPath, string projectName) {        
         // write out core fields to top of fst file
@@ -612,7 +617,7 @@ class AvatarExporter : MonoBehaviour {
         foreach (var userBoneInfo in userBoneInfos) {
             if (userBoneInfo.Value.HasHumanMapping()) {
                 string hifiJointName = HUMANOID_TO_HIFI_JOINT_NAME[userBoneInfo.Value.humanName];
-                File.AppendAllText(exportFstPath, "jointMap = " + hifiJointName + " = " + userBoneInfo.Key + "\n");
+                File.AppendAllText(exportFstPath, "jointMap = " + hifiJointName + " = " + removeTypeFromJointname(userBoneInfo.Key) + "\n");
             }
         }
         
@@ -653,7 +658,7 @@ class AvatarExporter : MonoBehaviour {
             
             // swap from left-handed (Unity) to right-handed (HiFi) coordinates and write out joint rotation offset to fst
             jointOffset = new Quaternion(-jointOffset.x, jointOffset.y, jointOffset.z, -jointOffset.w);
-            File.AppendAllText(exportFstPath, "jointRotationOffset2 = " + userBoneName + " = (" + jointOffset.x + ", " +
+            File.AppendAllText(exportFstPath, "jointRotationOffset2 = " + removeTypeFromJointname(userBoneName) + " = (" + jointOffset.x + ", " +
                                               jointOffset.y + ", " + jointOffset.z + ", " + jointOffset.w + ")\n");
         }
         
