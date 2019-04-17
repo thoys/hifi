@@ -2016,6 +2016,10 @@ SelectionDisplay = (function() {
         debugPickPlaneHits = [];
     };
     
+    const PERFORM_SNAP_BEGIN = true;
+    const PERFORM_SNAP_MOVE = true;
+    const PERFORM_SNAP_END = true;
+    
     // TOOL DEFINITION: HANDLE TRANSLATE XZ TOOL
     function addHandleTranslateXZTool(overlay, mode, doDuplicate) {
         var initialPick = null;
@@ -2028,9 +2032,15 @@ SelectionDisplay = (function() {
         var greatestDimension = 0.0;
         var startingDistance = 0.0;
         var startingElevation = 0.0;
+        var initialRotation = null;
         addHandleTool(overlay, {
             mode: mode,
             onBegin: function(event, pickRay, pickResult) {
+                if (PERFORM_SNAP_BEGIN && lastMouseEvent.isControl) {
+                    performSnap(pickRay, initialRotation);
+                    return;
+                }
+                
                 var wantDebug = false;
                 if (wantDebug) {
                     print("================== TRANSLATE_XZ(Beg) -> =======================");
@@ -2063,6 +2073,7 @@ SelectionDisplay = (function() {
                 that.setHandleDuplicatorVisible(false);
 
                 startPosition = SelectionManager.worldPosition;
+                initialRotation = SelectionManager.worldRotation;
                 pickPlanePosition = pickResult.intersection;
                 greatestDimension = Math.max(Math.max(SelectionManager.worldDimensions.x, 
                                                       SelectionManager.worldDimensions.y),
@@ -2088,6 +2099,10 @@ SelectionDisplay = (function() {
                 }
             },
             onEnd: function(event, reason) {
+                var pickRay = generalComputePickRay(event.x, event.y);
+                if (PERFORM_SNAP_END && lastMouseEvent.isControl) {
+                    performSnap(pickRay, initialRotation);
+                }
                 pushCommandForSelections(duplicatedEntityIDs);
                 if (isConstrained) {
                     Overlays.editOverlay(xRailOverlay, {
@@ -2106,6 +2121,10 @@ SelectionDisplay = (function() {
             onMove: function(event) {
                 var wantDebug = false;
                 var pickRay = generalComputePickRay(event.x, event.y);
+                if (PERFORM_SNAP_MOVE && lastMouseEvent.isControl) {
+                    performSnap(pickRay, initialRotation);
+                    return;
+                }
 
                 var newPick = rayPlaneIntersection2(pickRay, pickPlanePosition, pickPlaneNormal);
 
@@ -2252,6 +2271,129 @@ SelectionDisplay = (function() {
                 SelectionManager._update(false, this);
             }
         });
+    }
+    
+    function fixAngleVec(angleVec) {
+        if (angleVec.x >= 180) {
+            angleVec.x -= 360;
+        }
+        if (angleVec.y >= 180) {
+            angleVec.y -= 360;
+        }
+        if (angleVec.z >= 180) {
+            angleVec.z -= 360;
+        }
+        if (angleVec.x < -180) {
+            angleVec.x += 360;
+        }
+        if (angleVec.y < -180) {
+            angleVec.y += 360;
+        }
+        if (angleVec.z < -180) {
+            angleVec.z += 360;
+        }
+        return angleVec;
+    }
+    
+    function getAngleVecDifference(rotationAVec, rotationBVec) {
+        var xDiff = Math.abs(rotationAVec.x - rotationBVec.x);
+        var yDiff = Math.abs(rotationAVec.y - rotationBVec.y);
+        var zDiff = Math.abs(rotationAVec.z - rotationBVec.z);
+        return xDiff + yDiff + zDiff;
+    }
+    
+    function snapPrint(printStr) {
+        //print("performSnap " + printStr);
+    }
+    
+    function performSnap(pickRay, initialRotation) {
+        var selectedEntityID = SelectionManager.selections[0];
+        var ray = Entities.findRayIntersection(pickRay, true, [], [selectedEntityID]);
+        snapPrint("performSnap intersects " + ray.intersects);
+        if (ray.intersects) {
+            var intersectPosition = ray.intersection;
+            var intersectEntityID = ray.entityID;
+            var intersectNormal = ray.surfaceNormal;
+            snapPrint("performSnap intersectPosition " + intersectPosition.x + ", " + intersectPosition.y + ", " + intersectPosition.z);
+            snapPrint("performSnap intersectNormal " + intersectNormal.x + ", " + intersectNormal.y + ", " + intersectNormal.z);
+            snapPrint("performSnap intersectEntityID " + intersectEntityID);
+            snapPrint("performSnap intersect face " + ray.face);
+            
+            var originalProperties = Entities.getEntityProperties(selectedEntityID, ["rotation", "dimensions", "registrationPoint"]);
+            var originalRotation = originalProperties.rotation;
+            var dimensions = originalProperties.dimensions;
+            var registrationPoint = originalProperties.registrationPoint
+            var unfixedOriginalRotVec = Quat.safeEulerAngles(originalRotation);
+            var originalRotationVec = fixAngleVec(Quat.safeEulerAngles(originalRotation));
+            snapPrint("dimensions " + dimensions.x + ", " + dimensions.y + ", " + dimensions.z);
+            snapPrint("registrationPoint " + registrationPoint.x + ", " + registrationPoint.y + ", " + registrationPoint.z);
+            snapPrint("unfixedOriginalRotVec " + unfixedOriginalRotVec.x + ", " + unfixedOriginalRotVec.y + ", " + unfixedOriginalRotVec.z);
+            snapPrint("originalRotationVec " + originalRotationVec.x + ", " + originalRotationVec.y + ", " + originalRotationVec.z);
+            
+            var intersectPositionPlusNormal = Vec3.sum(intersectPosition, intersectNormal);
+            var rotation = Quat.lookAtSimple(intersectPositionPlusNormal, intersectPosition);
+            var unfixedRotVec = Quat.safeEulerAngles(rotation);
+            var rotationVec = fixAngleVec(Quat.safeEulerAngles(rotation));
+            var minRotationDifference = getAngleVecDifference(rotationVec, originalRotationVec);
+            snapPrint("unfixedRotVec " + unfixedRotVec.x + ", " + unfixedRotVec.y + ", " + unfixedRotVec.z);
+            snapPrint("rotationVec " + rotationVec.x + ", " + rotationVec.y + ", " + rotationVec.z)
+            snapPrint("original minRotationDifference " + minRotationDifference);
+
+            for (var xRotation = 0; xRotation <= 270; xRotation += 90) {
+                for (var yRotation = 0; yRotation <= 270; yRotation += 90) {
+                    for (var zRotation = 0; zRotation <= 270; zRotation += 90) {
+                        var rotationXNormal = { x: 1, y: 0, z: 0 };
+                        var rotationYNormal = { x: 0, y: 1, z: 0 };
+                        var rotationZNormal = { x: 0, y: 0, z: 1 };
+                        
+                        rotationXNormal = Vec3.multiplyQbyV(rotation, rotationXNormal);
+                        rotationYNormal = Vec3.multiplyQbyV(rotation, rotationYNormal);
+                        rotationZNormal = Vec3.multiplyQbyV(rotation, rotationZNormal);
+                        
+                        var rotationXChange = Quat.angleAxis(xRotation, rotationXNormal);
+                        var rotationYChange = Quat.angleAxis(yRotation, rotationYNormal);
+                        var rotationZChange = Quat.angleAxis(zRotation, rotationZNormal);
+                        
+                        var rotationAlternate = Quat.multiply(rotationXChange, rotation);
+                        rotationAlternate = Quat.multiply(rotationYChange, rotationAlternate);
+                        rotationAlternate = Quat.multiply(rotationZChange, rotationAlternate);
+                        
+                        var unfixedRotationAlternateVec = Quat.safeEulerAngles(rotationAlternate);
+                        snapPrint("unfixedRotationAlternateVec " + unfixedRotationAlternateVec.x + ", " + unfixedRotationAlternateVec.y + ", " + unfixedRotationAlternateVec.z);
+                        var rotationAlternateVec = fixAngleVec(unfixedRotationAlternateVec);
+                        
+                        var rotationDifference = getAngleVecDifference(rotationAlternateVec, originalRotationVec);
+                        snapPrint("rotationAlternateVec " + rotationAlternateVec.x + ", " + rotationAlternateVec.y + ", " + rotationAlternateVec.z + " rotationDifference " + rotationDifference);
+                        if (rotationDifference < minRotationDifference) {
+                            rotation = rotationAlternate;
+                            minRotationDifference = rotationDifference;
+                            snapPrint("new best rotation " + Quat.safeEulerAngles(rotation).x + ", " + Quat.safeEulerAngles(rotation).y + ", " + Quat.safeEulerAngles(rotation).z);
+                        }
+                    }
+                }
+            }
+            
+            snapPrint("result rotation " + Quat.safeEulerAngles(rotation).x + ", " + Quat.safeEulerAngles(rotation).y + ", " + Quat.safeEulerAngles(rotation).z);
+
+            var intersectNormalLocal = Vec3.multiplyQbyV(Quat.inverse(rotation), intersectNormal);
+            snapPrint("intersectNormalLocal " + intersectNormalLocal.x + ", " + intersectNormalLocal.y + ", " + intersectNormalLocal.z);         
+            var pivotOffset = Vec3.multiplyVbyV(registrationPoint, dimensions);
+            snapPrint("pivotOffset1 " + pivotOffset.x + ", " + pivotOffset.y + ", " + pivotOffset.z);
+            pivotOffset = Vec3.multiplyVbyV(pivotOffset, intersectNormalLocal);
+            snapPrint("pivotOffset2 " + pivotOffset.x + ", " + pivotOffset.y + ", " + pivotOffset.z);
+            var pivotLength = Vec3.length(pivotOffset);
+            var normalOffset = Vec3.multiply(pivotLength, intersectNormal);
+            snapPrint("pivotLength " + pivotLength + " normalOffset " + normalOffset.x + ", " + normalOffset.y + ", " + normalOffset.z);
+            var newPosition = Vec3.sum(intersectPosition, normalOffset);
+            snapPrint("newPosition " + newPosition.x + ", " + newPosition.y + ", " + newPosition.z);
+            
+            var newProperties = {};
+            newProperties.position = newPosition;
+            newProperties.rotation = rotation;
+            //newProperties.parentID = selectedEntityID;
+            
+            Entities.editEntity(selectedEntityID, newProperties);
+        }
     }
 
     // TOOL DEFINITION: HANDLE TRANSLATE TOOL    
