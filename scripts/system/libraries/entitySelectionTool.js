@@ -59,14 +59,14 @@ SelectionManager = (function() {
         }
 
         if (messageParsed.method === "selectEntity") {
-            if (!SelectionDisplay.triggered() || SelectionDisplay.triggeredHand === messageParsed.hand) {
+            if (!that.selectionDisplay.triggered() || that.selectionDisplay.triggeredHand === messageParsed.hand) {
                 if (wantDebug) {
                     print("setting selection to " + messageParsed.entityID);
                 }
                 that.setSelections([messageParsed.entityID], that);
             }
         } else if (messageParsed.method === "clearSelection") {
-            if (!SelectionDisplay.triggered() || SelectionDisplay.triggeredHand === messageParsed.hand) {
+            if (!that.selectionDisplay.triggered() || that.selectionDisplay.triggeredHand === messageParsed.hand) {
                 that.clearSelections();
             }
         } else if (messageParsed.method === "pointingAt") {
@@ -120,6 +120,12 @@ SelectionManager = (function() {
     that.pointingAtTabletLeft = false;
     that.pointingAtTabletRight = false;
 
+    that.selectionDisplay = null;
+
+    that.setSelectionDisplay = function(selectionDisplay) {
+        that.selectionDisplay = selectionDisplay;
+    };
+
     that.saveProperties = function() {
         that.savedProperties = {};
         for (var i = 0; i < that.selections.length; i++) {
@@ -139,7 +145,17 @@ SelectionManager = (function() {
         return that.selections.length > 0;
     };
 
+    that.isEntitySelected = function(entityID) {
+        for (var i = 0; i < that.selections.length; ++i) {
+            if (that.selections[i] === entityID) {
+                return true;
+            }
+        }
+        return false;
+    };
+
     that.setSelections = function(entityIDs, caller) {
+        Selection.clearSelectedItemsList(HIGHLIGHT_LIST_NAME);
         that.selections = [];
         for (var i = 0; i < entityIDs.length; i++) {
             var entityID = entityIDs[i];
@@ -193,6 +209,7 @@ SelectionManager = (function() {
 
     that.clearSelections = function(caller) {
         that.selections = [];
+        Selection.clearSelectedItemsList(HIGHLIGHT_LIST_NAME);
         that._update(true, caller);
     };
     
@@ -533,7 +550,7 @@ SelectionManager = (function() {
             that.entityType = properties.type;
             
             if (selectionUpdated) {
-                SelectionDisplay.useDesiredSpaceMode();
+                that.selectionDisplay.useDesiredSpaceMode();
             }
         } else {
             properties = Entities.getEntityProperties(that.selections[0], ['type', 'boundingBox']);
@@ -570,7 +587,7 @@ SelectionManager = (function() {
             };
 
             // For 1+ selections we can only modify selections in world space
-            SelectionDisplay.setSpaceMode(SPACE_WORLD, false);
+            that.selectionDisplay.setSpaceMode(SPACE_WORLD, false);
         }
 
         for (var j = 0; j < listeners.length; j++) {
@@ -596,8 +613,431 @@ function normalizeDegrees(degrees) {
     return degrees;
 }
 
-// SELECTION DISPLAY DEFINITION
-SelectionDisplay = (function() {
+// SELECTION DISPLAY DEFINITIONS
+
+SimpleSelectionDisplay = (function() {
+    var that = {};
+    /*
+        1. Lift the entity up slightly when selected
+            a. selection
+        2. left click drag over plane
+            a. have selection plane
+            b. drop shadow?
+        3. ctrl + click-drag to move up/down off plane
+
+    */
+
+    var COLOR_WHITE_HIGHLIGHT = { red: 220, green: 220, blue: 220 };
+
+    var ENABLE_DROP_SHADOW = true;
+    var ENABLE_LIFTING = true;
+    var LIFT_HEIGHT = 0.2;
+
+    var editHandleOutlineStyle = {
+        outlineUnoccludedColor: COLOR_WHITE_HIGHLIGHT,
+        outlineOccludedColor: COLOR_WHITE_HIGHLIGHT,
+        fillUnoccludedColor: COLOR_WHITE_HIGHLIGHT,
+        fillOccludedColor: COLOR_WHITE_HIGHLIGHT,
+        outlineUnoccludedAlpha: 1,
+        outlineOccludedAlpha: 0.2,
+        fillUnoccludedAlpha: 0,
+        fillOccludedAlpha: 0,
+        outlineWidth: 5,
+        isOutlineSmooth: true
+    };
+    Selection.enableListHighlight(HIGHLIGHT_LIST_NAME, editHandleOutlineStyle);
+
+    var selectedEntity = null;
+    var selectedTool = null;
+
+    var dropShadowEntity = null;
+
+    var TranslationTool = (function() {
+        var that = {};
+        that.name = "translateTool";
+
+        var pickPlanePosition = null;
+        var pickPlaneNormal = { x: 0, y: 1, z: 0 };
+
+        that.onBegin = function(event, clickedEntityResult) {
+            SelectionManager.saveProperties();
+            pickPlanePosition = clickedEntityResult.intersection;
+        };
+
+        that.onEnd = function() {
+            pushCommandForSelections();
+        };
+
+        that.onMove = function(event) {
+            // TODO: move up and down when ctrl is being held
+            var isTranslatingVertically = event.isControl;
+
+            var pickRay = Camera.computePickRay(event.x, event.y);
+            //print(JSON.stringify(pickRay));
+            //print(JSON.stringify(pickPlanePosition));
+            //print(JSON.stringify(pickPlaneNormal));
+            if (!isTranslatingVertically) {
+                pickPlaneNormal = { x: 0, y: 1, z: 0 };
+            } else {
+                pickPlaneNormal = Vec3.multiplyQbyV(Camera.orientation, { x: 0, y: 0, z: 1 });
+            }
+
+            var newPick = rayPlaneIntersection2(pickRay, pickPlanePosition, pickPlaneNormal);
+            if (!newPick) {
+                print("Pick ray does not intersect XZ plane.");
+                return false;
+            }
+            print(JSON.stringify(newPick));
+            Entities.editEntity(selectedEntity, {
+                position: newPick
+            });
+
+            SelectionManager._update(false, this);
+
+            return true;
+        };
+
+        return that;
+    })();
+
+    var RotateTool = (function() {
+        var that = {};
+        that.name = "rotateTool";
+
+        var pickPlanePosition = null;
+        var pickPlaneNormal = null;
+        var initialRotation = null;
+
+        that.onBegin = function(event, clickedEntityResult) {
+            SelectionManager.saveProperties();
+            pickPlanePosition = clickedEntityResult.intersection;
+            initialRotation = Entities.getEntityProperties(selectedEntity, 'rotation').rotation;
+        };
+
+        that.onEnd = function() {
+            pushCommandForSelections();
+        };
+
+        that.onMove = function(event) {
+            var pickRay = Camera.computePickRay(event.x, event.y);
+
+            pickPlaneNormal = Vec3.multiplyQbyV(Camera.orientation, { x: 0, y: 0, z: 1 });
+            var newPick = rayPlaneIntersection(pickRay, pickPlanePosition, pickPlaneNormal);
+
+            var localPlane = Vec3.multiplyQbyV(Quat.inverse(Camera.orientation), Vec3.subtract(newPick, pickPlanePosition));
+            //print("localPlane: " + JSON.stringify(localPlane));
+
+            const CHANGE_MULTIPLIER = 30;
+
+            if (event.isControl) {
+                var pitchChange = Quat.fromPitchYawRollDegrees(localPlane.x * CHANGE_MULTIPLIER, 0, 0);
+                var newRotation = Quat.multiply(initialRotation, pitchChange);
+
+                Entities.editEntity(selectedEntity, {
+                    rotation: newRotation
+                });
+            } else {
+                var yawChange = Quat.fromPitchYawRollDegrees(0, localPlane.x * CHANGE_MULTIPLIER, 0);
+                var newRotation = Quat.multiply(initialRotation, yawChange);
+
+                Entities.editEntity(selectedEntity, {
+                    rotation: newRotation
+                });
+            }
+
+            SelectionManager._update(false, this);
+        };
+
+        return that;
+    })();
+
+    var ScaleTool = (function() {
+        var that = {};
+        that.name = "scaleTool";
+
+        var pickPlanePosition = null;
+        var pickPlaneNormal = null;
+        var initialDimensions = null;
+
+
+        that.onBegin = function(event, clickedEntityResult) {
+            SelectionManager.saveProperties();
+            pickPlanePosition = clickedEntityResult.intersection;
+            initialDimensions = Entities.getEntityProperties(selectedEntity, 'dimensions').dimensions;
+        };
+
+        that.onEnd = function() {
+            pushCommandForSelections();
+        };
+
+        that.onMove = function(event) {
+            var pickRay = Camera.computePickRay(event.x, event.y);
+
+            pickPlaneNormal = Vec3.multiplyQbyV(Camera.orientation, { x: 0, y: 0, z: 1 });
+            var newPick = rayPlaneIntersection(pickRay, pickPlanePosition, pickPlaneNormal);
+
+            var yDifference = newPick.y - pickPlanePosition.y;
+            if (yDifference > 0) {
+
+                var growMultiplier = 1 + (yDifference / (initialDimensions.y / 2));
+                // increase size
+                print("inc % " + growMultiplier);
+                Entities.editEntity(selectedEntity, {
+                    dimensions: Vec3.multiply(initialDimensions, growMultiplier)
+                });
+
+            } else {
+                // decrease size
+                var shrinkMultiplier = 1 - ((-yDifference / (initialDimensions.y / 2)) / 5);
+                print("dec % " + shrinkMultiplier);
+                Entities.editEntity(selectedEntity, {
+                    dimensions: Vec3.multiply(initialDimensions, shrinkMultiplier)
+                });
+
+            }
+            /*
+            Entities.editEntity(selectedEntity, {
+                position: newPick
+            });
+            */
+            print(Vec3.distance(pickPlanePosition, newPick));
+            print(JSON.stringify(newPick));
+            print(yDifference);
+
+            SelectionManager._update(false, this);
+            return true;
+        };
+
+        return that;
+    })();
+
+    function releaseTool() {
+        if (selectedTool === null) {
+            return;
+        }
+
+        console.log("Releasing tool " + selectedTool.name);
+
+        if (selectedTool.onEnd !== undefined) {
+            selectedTool.onEnd();
+        }
+
+        selectedTool = null;
+    }
+
+    function captureEntity(entityID) {
+        releaseEntity();
+
+        selectedEntity = entityID;
+
+        console.log("Capturing entity: " + selectedEntity);
+
+        var liftHeight = 0;
+        if (ENABLE_LIFTING) {
+            liftHeight = LIFT_HEIGHT;
+        }
+
+        var properties = Entities.getEntityProperties(selectedEntity, ['dimensions', 'localPosition']);
+
+        if (ENABLE_LIFTING) {
+            Entities.editEntity(selectedEntity, {
+                localPosition: {
+                    x: properties.localPosition.x,
+                    y: properties.localPosition.y + liftHeight,
+                    z: properties.localPosition.z
+                }
+            });
+        }
+
+        if (ENABLE_DROP_SHADOW) {
+            var dimensions = properties.dimensions;
+            dropShadowEntity = Entities.addEntity({
+                type: "Gizmo",
+                gizmoType: "ring",
+                renderLayer: "world",
+                parentID: selectedEntity,
+                localPosition: {x: 0, y: -(dimensions.y / 2) - liftHeight, z: 0},
+                dimensions: {x: dimensions.x, y: 0.001, z: dimensions.z},
+                canCastShadow: false,
+                ignorePickIntersection: true,
+                ring: {
+                    outerStartAlpha: 0.5,
+                    outerEndAlpha: 0.5,
+                    innerStartAlpha: 1,
+                    innerEndAlpha: 1,
+                    innerStartColor: {red: 0, green: 0, blue: 0},
+                    innerEndColor: {red: 0, green: 0, blue: 0},
+                    outerStartColor: {red: 0, green: 0, blue: 0},
+                    outerEndColor: {red: 0, green: 0, blue: 0},
+                }
+            }, "local");
+            console.log("Drop shadow Entity = " + dropShadowEntity);
+        }
+    }
+
+    function updateDropShadow() {
+        if (selectedEntity === null || dropShadowEntity === null) {
+            return;
+        }
+
+        var dimensions = Entities.getEntityProperties(selectedEntity, 'dimensions').dimensions;
+        var liftHeight = 0;
+        if (ENABLE_LIFTING) {
+            liftHeight = LIFT_HEIGHT;
+        }
+
+        Entities.editEntity(dropShadowEntity, {
+            localPosition: {x: 0, y: -(dimensions.y / 2) - liftHeight, z: 0},
+            dimensions: {x: dimensions.x, y: 0.001, z: dimensions.z},
+        });
+    }
+
+    function releaseEntity() {
+        if (selectedEntity === null) {
+            return;
+        }
+
+        console.log("Releasing entity: " + selectedEntity);
+
+        if (ENABLE_DROP_SHADOW) {
+            Entities.deleteEntity(dropShadowEntity);
+            dropShadowEntity = null;
+        }
+
+        var properties = Entities.getEntityProperties(selectedEntity, ['dimensions', 'localPosition']);
+
+        if (ENABLE_LIFTING) {
+            Entities.editEntity(selectedEntity, {
+                localPosition: {
+                    x: properties.localPosition.x,
+                    y: properties.localPosition.y - LIFT_HEIGHT,
+                    z: properties.localPosition.z
+                }
+            });
+        }
+
+
+        selectedEntity = null;
+    }
+
+    that.mousePressEvent = function(event) {
+
+        releaseTool();
+
+        if (SelectionManager.selections.length !== 1) {
+            // for now only select single selection manipulations in the SimpleSelectionDisplay
+            return false;
+        }
+
+
+        var clickedEntity = findClickedEntity(event);
+        if (clickedEntity === null) {
+            // mouse press was not on entity.
+            return false;
+        }
+
+        if (!SelectionManager.isEntitySelected(clickedEntity.entityID)) {
+            // clicked entity is not selected.
+            return false;
+        }
+
+        if (clickedEntity.entityID !== selectedEntity) {
+            // for safety, only allow actions on our remembered selectedEntity
+            return false;
+        }
+
+
+        print(JSON.stringify(clickedEntity));
+
+        print(JSON.stringify(event));
+
+        if (event.isLeftButton && event.isRightButton) {
+            selectedTool = ScaleTool;
+        } else if (event.isLeftButton) {
+            selectedTool = TranslationTool;
+        } else if (event.isRightButton) {
+            selectedTool = RotateTool;
+        } else {
+            // No valid tool selection.
+            return false;
+        }
+
+        if (selectedTool.onBegin !== undefined) {
+            selectedTool.onBegin(event, clickedEntity);
+        }
+
+        return true;
+    };
+
+    that.mouseMoveEvent = function(event) {
+        if (selectedTool === null) {
+            return false;
+        }
+        if (selectedTool.onMove !== undefined) {
+            return selectedTool.onMove(event);
+        }
+        return true;
+    };
+
+    that.mouseReleaseEvent = function(event) {
+        releaseTool();
+    };
+
+    that.isEditHandle = function(overlayID) {
+        // at the moment we don't have pickable edit handles in the SimpleSelectionDisplay
+    };
+
+    that.select = function(entityID, event) {
+        if (SelectionManager.selections.length !== 1) {
+            // for now only select single selection manipulations in the SimpleSelectionDisplay
+            return;
+        }
+        captureEntity(entityID);
+
+    };
+
+    that.updateHandles = function() {
+        //TODO: update drop shadow here
+        updateDropShadow();
+    };
+
+    that.cleanup = function() {
+        releaseEntity();
+    };
+
+    that.setSpaceMode = function(newSpaceMode, isDesiredChange) {
+        //TODO: possibly move this to selection manager
+    };
+
+    that.getSpaceMode = function() {
+        //TODO: possibly move this to selection manager
+    };
+
+    that.toggleSpaceMode = function() {
+        //TODO: possibly move this to selection manager
+    };
+
+    that.useDesiredSpaceMode = function() {
+        //TODO: possibly move this to selection manager
+    };
+
+    that.enableTriggerMapping = function() {
+        //TODO: HandController support?
+    };
+
+    that.disableTriggerMapping = function() {
+        //TODO: HandController support?
+    };
+
+    that.checkControllerMove = function() {
+        //TODO: HandController support?
+    };
+
+
+    return that;
+})();
+
+AdvancedSelectionDisplay = (function() {
     var that = {};
 
     const COLOR_GREEN = { red: 31, green: 198, blue: 166 };
@@ -1359,7 +1799,7 @@ SelectionDisplay = (function() {
     // NOTE: mousePressEvent and mouseMoveEvent from the main script should call us., so we don't hook these:
     //       Controller.mousePressEvent.connect(that.mousePressEvent);
     //       Controller.mouseMoveEvent.connect(that.mouseMoveEvent);
-    Controller.mouseReleaseEvent.connect(that.mouseReleaseEvent);
+    //       Controller.mouseReleaseEvent.connect(that.mouseReleaseEvent);
     Controller.keyPressEvent.connect(that.keyPressEvent);
     Controller.keyReleaseEvent.connect(that.keyReleaseEvent);
 
@@ -1866,7 +2306,6 @@ SelectionDisplay = (function() {
             print("====== Update Handles <=======");
         }
     };
-    Script.update.connect(that.updateHandles);
 
     // FUNCTION: UPDATE ACTIVE ROTATE RING
     that.updateActiveRotateRing = function() {

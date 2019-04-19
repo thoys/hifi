@@ -28,7 +28,7 @@ const PROFILE = !PROFILING_ENABLED ? PROFILE_NOOP : function(name, fn, args) {
     console.log("PROFILE-Script " + profileIndent + "(" + name + ") End " + delta + "ms");
 };
 
-EntityListTool = function(shouldUseEditTabletApp) {
+EntityListTool = function(shouldUseEditTabletApp, selectionDisplay) {
     var that = {};
 
     var CreateWindow = Script.require('../modules/createWindow.js');
@@ -211,7 +211,7 @@ EntityListTool = function(shouldUseEditTabletApp) {
                 type: "update",
                 entities: entities,
                 selectedIDs: selectedIDs,
-                spaceMode: SelectionDisplay.getSpaceMode(),
+                spaceMode: selectionDisplay.getSpaceMode(),
             });
         });
     };
@@ -301,7 +301,7 @@ EntityListTool = function(shouldUseEditTabletApp) {
             // make sure that the name also gets updated in the properties window
             SelectionManager._update();
         } else if (data.type === "toggleSpaceMode") {
-            SelectionDisplay.toggleSpaceMode();
+            selectionDisplay.toggleSpaceMode();
         } else if (data.type === 'keyUpEvent') {
             keyUpEventFromUIWindow(data.keyUpEvent);
         }
