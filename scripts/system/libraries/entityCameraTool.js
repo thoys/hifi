@@ -18,6 +18,9 @@ var PAN_ZOOM_SCALE_RATIO = 0.4;
 var KEY_ORBIT_SENSITIVITY = 90;
 var KEY_ZOOM_SENSITIVITY = 3;
 
+var MOVE_SPEED = 3;
+var MOVE_SPRINT_MULTIPLIER = 2;
+
 // Scaling applied based on the size of the object being focused (Larger values focus further away)
 var FOCUS_ZOOM_SCALE = 2.3;
 
@@ -35,6 +38,7 @@ var MAX_ZOOM_DISTANCE = 14000;
 var MODE_INACTIVE = 'inactive';
 var MODE_ORBIT = 'orbit';
 var MODE_PAN = 'pan';
+var MODE_LOOK = 'look';
 
 var EASING_MULTIPLIER = 8;
 
@@ -63,6 +67,22 @@ function mergeObjects(obj1, obj2) {
     return newObj;
 }
 
+var keycodes = {
+    left: 16777234,
+    right: 16777236,
+    up: 16777235,
+    down: 16777237,
+    shift: 16777248,
+    space: 32,
+};
+
+for (var i = 0; i <= 26; ++i) {
+    console.log("i",i);
+    var keycode = 65 + i;
+    var ch = String.fromCharCode(keycode).toLowerCase();
+    keycodes[ch] = keycode;
+}
+
 CameraManager = function() {
     var that = {};
 
@@ -70,35 +90,35 @@ CameraManager = function() {
     that.mode = MODE_INACTIVE;
 
     var actions = {
-        orbitLeft: 0,
-        orbitRight: 0,
         orbitUp: 0,
         orbitDown: 0,
-        orbitForward: 0,
-        orbitBackward: 0,
-    }
+    };
 
     var keyToActionMapping = {
-        65: "orbitLeft",     // "a"
-        68: "orbitRight",    // "d"
-        87: "orbitForward",  // "w"
-        83: "orbitBackward", // "s"
-        69: "orbitUp",       // "e"
-        67: "orbitDown",     // "c"
-        
-        16777234: "orbitLeft",     // "LEFT"
-        16777236: "orbitRight",    // "RIGHT"
-        16777235: "orbitForward",  // "UP"
-        16777237: "orbitBackward", // "DOWN"
-    }
+    };
+    keyToActionMapping[keycodes.a] = "moveLeft";
+    keyToActionMapping[keycodes.d] = "moveRight";
+    keyToActionMapping[keycodes.w] = "moveForward";
+    keyToActionMapping[keycodes.s] = "moveBackward";
+    keyToActionMapping[keycodes.e] = "moveUp";
+    keyToActionMapping[keycodes.space] = "moveUp";
+    keyToActionMapping[keycodes.c] = "moveDown";
+
+    keyToActionMapping[keycodes.left] = "orbitLeft";
+    keyToActionMapping[keycodes.right] = "orbitRight";
+    keyToActionMapping[keycodes.up] = "orbitForward";
+    keyToActionMapping[keycodes.down] = "orbitBackward";
+
+    keyToActionMapping[keycodes.shift] = "sprint";
 
     var CAPTURED_KEYS = [];
     for (var key in keyToActionMapping) {
         CAPTURED_KEYS.push(key);
+        actions[keyToActionMapping[key]] = 0;
     }
 
     function getActionForKeyEvent(event) {
-        if (!event.isControl) {
+        if (!event.isControl && !event.isAutoRepeat) {
             var action = keyToActionMapping[event.key];
             if (action !== undefined) {
                 if (event.isShifted) {
@@ -165,7 +185,7 @@ CameraManager = function() {
         var xzDist = Math.sqrt(dPos.x * dPos.x + dPos.z * dPos.z);
 
         that.targetPitch = -Math.atan2(dPos.y, xzDist) * 180 / Math.PI;
-        that.targetPitch += (90 - that.targetPitch) / 3.0; // Swing camera "up" to look down at the focal point
+        that.targetPitch += (90 - that.targetPitch) / 6.0; // Swing camera "up" to look down at the focal point
         that.targetYaw = Math.atan2(dPos.x, dPos.z) * 180 / Math.PI;
         that.pitch = that.targetPitch;
         that.yaw = that.targetYaw;
@@ -201,6 +221,7 @@ CameraManager = function() {
     }
 
     that.focus = function(position, dimensions, easeOrientation) {
+        position = { x: position.x, y: position.y, z: position.z };
         if (dimensions) {
             var size = Math.max(dimensions.x, Math.max(dimensions.y, dimensions.z));
             that.targetZoomDistance = Math.max(size * FOCUS_ZOOM_SCALE, FOCUS_MIN_ZOOM);
@@ -257,6 +278,10 @@ CameraManager = function() {
         that.updateCamera();
     }
 
+    that.setZoom = function(zoom) {
+        that.targetZoomDistance = Math.min(Math.max(zoom, MIN_ZOOM_DISTANCE), MAX_ZOOM_DISTANCE);
+    }
+
     that.addZoom = function(zoom) {
         zoom *= that.targetZoomDistance * ZOOM_SCALING;
         that.targetZoomDistance = Math.min(Math.max(that.targetZoomDistance + zoom, MIN_ZOOM_DISTANCE), MAX_ZOOM_DISTANCE);
@@ -284,7 +309,40 @@ CameraManager = function() {
                 that.lastMousePosition.y = y;
                 hasDragged = true;
             }
-            if (that.mode === MODE_ORBIT) {
+
+            if (that.mode === MODE_LOOK) {
+                var diffX = x - that.lastMousePosition.x;
+                var diffY = y - that.lastMousePosition.y;
+
+                var dYaw = MOUSE_SENSITIVITY * (diffX / 5.0);
+                var dPitch = MOUSE_SENSITIVITY * (diffY / 5.0);
+
+                var c2fYaw = 180.0 + that.yaw - dYaw;
+                var c2fPitch = -that.pitch - dPitch;
+
+                var cameraPos = that.calculateCameraPosition();
+                var focalPointOffset = Quat.getForward(Quat.fromPitchYawRollDegrees(c2fPitch, c2fYaw, 0));
+                focalPointOffset = Vec3.multiply(that.zoomDistance, focalPointOffset);
+                var newFocalPoint = Vec3.sum(cameraPos, focalPointOffset);
+
+                that.focalPoint = newFocalPoint;
+                that.targetFocalPoint = newFocalPoint;
+
+                that.targetYaw = c2fYaw + 180;
+                that.targetPitch = -c2fPitch;
+
+                // FIX: We don't apply this clamping to the yaw/pitch changes we make above. We should do this first.
+                while (that.targetYaw > 180.0) that.targetYaw -= 360;
+                while (that.targetYaw < -180.0) that.targetYaw += 360;
+
+                if (that.targetPitch > 90) that.targetPitch = 90;
+                if (that.targetPitch < -90) that.targetPitch = -90;
+
+                that.yaw = that.targetYaw;
+                that.pitch = that.targetPitch;
+
+                that.updateCamera();
+            } else if (that.mode === MODE_ORBIT) {
                 var diffX = x - that.lastMousePosition.x;
                 var diffY = y - that.lastMousePosition.y;
                 that.targetYaw -= MOUSE_SENSITIVITY * (diffX / 5.0);
@@ -356,6 +414,12 @@ CameraManager = function() {
         }
 
         if (event.isRightButton || (event.isLeftButton && event.isControl && !event.isShifted)) {
+            if (event.isAlt) {
+                that.mode = MODE_ORBIT;
+            } else {
+                that.mode = MODE_LOOK;
+            }
+        } else if (event.isLeftButton && event.isAlt) {
             that.mode = MODE_ORBIT;
         } else if (event.isMiddleButton || (event.isLeftButton && event.isControl && event.isShifted)) {
             that.mode = MODE_PAN;
@@ -409,12 +473,7 @@ CameraManager = function() {
         that.updateCamera();
     }
 
-    that.updateCamera = function() {
-        if (!that.enabled || Camera.mode !== "independent") {
-            cameraTool.update();
-            return;
-        }
-
+    that.calculateCameraPosition = function() {
         var yRot = Quat.angleAxis(that.yaw, {
             x: 0,
             y: 1,
@@ -428,7 +487,17 @@ CameraManager = function() {
         var q = Quat.multiply(yRot, xRot);
 
         var pos = Vec3.multiply(Quat.getForward(q), that.zoomDistance);
-        Camera.setPosition(Vec3.sum(that.focalPoint, pos));
+
+        return Vec3.sum(that.focalPoint, pos);
+    }
+
+    that.updateCamera = function() {
+        if (!that.enabled || Camera.mode !== "independent") {
+            cameraTool.update();
+            return;
+        }
+
+        Camera.setPosition(that.calculateCameraPosition());
 
         yRot = Quat.angleAxis(that.yaw - 180, {
             x: 0,
@@ -473,6 +542,42 @@ CameraManager = function() {
         that.targetYaw += (actions.orbitRight - actions.orbitLeft) * dt * KEY_ORBIT_SENSITIVITY;
         that.targetPitch += (actions.orbitUp - actions.orbitDown) * dt * KEY_ORBIT_SENSITIVITY;
         that.targetPitch = clamp(that.targetPitch, -90, 90);
+
+        var orientation = Quat.fromPitchYawRollDegrees(that.targetPitch, that.targetYaw, 0);
+        var right = Quat.getRight(orientation);
+        var forward = Quat.getForward(orientation);
+        var up = Quat.getUp(orientation);
+
+        var moveDelta = MOVE_SPEED * dt;
+        if (actions.sprint) {
+            moveDelta = MOVE_SPRINT_MULTIPLIER;
+        }
+
+
+        if (actions.moveLeft) {
+            that.targetFocalPoint = Vec3.sum(that.targetFocalPoint, Vec3.multiply(right, moveDelta));
+            that.focalPoint = that.targetFocalPoint;
+        }
+        if (actions.moveRight) {
+            that.targetFocalPoint = Vec3.subtract(that.targetFocalPoint, Vec3.multiply(right, moveDelta));
+            that.focalPoint = that.targetFocalPoint;
+        }
+        if (actions.moveForward) {
+            that.targetFocalPoint = Vec3.subtract(that.targetFocalPoint, Vec3.multiply(forward, moveDelta));
+            that.focalPoint = that.targetFocalPoint;
+        }
+        if (actions.moveBackward) {
+            that.targetFocalPoint = Vec3.sum(that.targetFocalPoint, Vec3.multiply(forward, moveDelta));
+            that.focalPoint = that.targetFocalPoint;
+        }
+        if (actions.moveUp) {
+            that.targetFocalPoint = Vec3.sum(that.targetFocalPoint, Vec3.multiply(up, moveDelta));
+            that.focalPoint = that.targetFocalPoint;
+        }
+        if (actions.moveDown) {
+            that.targetFocalPoint = Vec3.subtract(that.targetFocalPoint, Vec3.multiply(up, moveDelta));
+            that.focalPoint = that.targetFocalPoint;
+        }
 
         var dZoom = actions.orbitBackward - actions.orbitForward;
         if (dZoom) {
