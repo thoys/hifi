@@ -2301,7 +2301,17 @@ SelectionDisplay = (function() {
         var zDiff = Math.abs(rotationAVec.z - rotationBVec.z);
         return xDiff + yDiff + zDiff;
     }
+	
+    function getSnapToNormalLocal(entityID) {
+        var snapToNormalLocal = getEntityCustomData("snapToNormalLocal", entityID, undefined);
+        return snapToNormalLocal;
+    }
     
+    function isEntitySnapped(entityID) {
+        var snapToNormalLocal = getSnapToNormalLocal(entityID);
+        return snapToNormalLocal !== undefined;
+    }
+       
     function snapPrint(printStr) {
         //print("performSnap " + printStr);
     }
@@ -2390,9 +2400,11 @@ SelectionDisplay = (function() {
             var newProperties = {};
             newProperties.position = newPosition;
             newProperties.rotation = rotation;
-            //newProperties.parentID = selectedEntityID;
+            newProperties.parentID = intersectEntityID;
             
             Entities.editEntity(selectedEntityID, newProperties);
+            
+            setEntityCustomData("snapToNormalLocal", selectedEntityID, intersectNormalLocal);
         }
     }
 
