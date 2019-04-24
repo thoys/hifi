@@ -502,3 +502,45 @@ getMainTabletIDs = function () {
     }
     return tabletIDs;
 };
+
+isPointInsideBox = function(point, box) {
+    var position = Vec3.subtract(point, box.position);
+    position = Vec3.multiplyQbyV(Quat.inverse(box.rotation), position);
+    return Math.abs(position.x) <= box.dimensions.x / 2 && Math.abs(position.y) <= box.dimensions.y / 2 &&
+           Math.abs(position.z) <= box.dimensions.z / 2;
+}
+
+getDistanceToCamera = function(position) {
+    var cameraPosition = Camera.getPosition();
+    var toCameraDistance = Vec3.length(Vec3.subtract(cameraPosition, position));
+    return toCameraDistance;
+}
+
+// Normalize degrees to be in the range (-180, 180)
+normalizeDegrees = function(degrees) {
+    var maxDegrees = 360;
+    var halfMaxDegrees = maxDegrees / 2;
+    degrees = ((degrees + halfMaxDegrees) % maxDegrees) - halfMaxDegrees;
+    if (degrees <= -halfMaxDegrees) {
+        degrees += maxDegrees;
+    }
+    return degrees;
+}
+
+normalizeEulerAngles = function(eulerAngles) {
+    eulerAngles.x = normalizeDegrees(eulerAngles.x);
+    eulerAngles.y = normalizeDegrees(eulerAngles.y);
+    eulerAngles.z = normalizeDegrees(eulerAngles.z);
+    return eulerAngles;
+}
+
+getEulerAngleDifference = function(angleVectorA, angleVectorB) {
+    var xDifference = Math.abs(angleVectorA.x - angleVectorB.x);
+    var yDifference = Math.abs(angleVectorA.y - angleVectorB.y);
+    var zDifference = Math.abs(angleVectorA.z - angleVectorB.z);
+    return xDifference + yDifference + zDifference;
+}
+
+deepCopy = function(v) {
+    return JSON.parse(JSON.stringify(v));
+}
