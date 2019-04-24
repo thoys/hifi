@@ -670,6 +670,12 @@ SimpleSelectionDisplay = (function() {
             var isTranslatingVertically = event.isControl;
 
             var pickRay = Camera.computePickRay(event.x, event.y);
+
+            if (!isTranslatingVertically) {
+                SelectionUtils.performSnap(pickRay, null);
+                return;
+            }
+
             //print(JSON.stringify(pickRay));
             //print(JSON.stringify(pickPlanePosition));
             //print(JSON.stringify(pickPlaneNormal));
