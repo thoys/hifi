@@ -10,9 +10,9 @@
 //  See the accompanying file LICENSE or http://www.apache.org/licenses/LICENSE-2.0.html
 //
 
-/* global Script, SelectionDisplay, LightOverlayManager, CameraManager, Grid, GridTool, EntityListTool, Vec3, SelectionManager,
-   Overlays, OverlayWebWindow, UserActivityLogger, Settings, Entities, Tablet, Toolbars, Messages, Menu, Camera,
-   progressDialog, tooltip, MyAvatar, Quat, Controller, Clipboard, HMD, UndoStack, OverlaySystemWindow,
+/* global Script, AdvancedSelectionDisplay, LightOverlayManager, CameraManager, Grid, GridTool, EntityListTool, Vec3,
+   SelectionManager, Overlays, OverlayWebWindow, UserActivityLogger, Settings, Entities, Tablet, Toolbars, Messages, Menu,
+   Camera, progressDialog, tooltip, MyAvatar, Quat, Controller, Clipboard, HMD, UndoStack, OverlaySystemWindow,
    keyUpEventFromUIWindow:true */
 
 (function() { // BEGIN LOCAL_SCOPE
@@ -76,8 +76,10 @@ var shouldUseEditTabletApp = function() {
 };
 
 
-var selectionDisplay = SelectionDisplay;
+var selectionDisplay = SimpleSelectionDisplay;
+//var selectionDisplay = AdvancedSelectionDisplay;
 var selectionManager = SelectionManager;
+selectionManager.setSelectionDisplay(selectionDisplay);
 
 var PARTICLE_SYSTEM_URL = Script.resolvePath("assets/images/icon-particles.svg");
 var POINT_LIGHT_URL = Script.resolvePath("assets/images/icon-point-light.svg");
@@ -114,7 +116,7 @@ gridTool.setVisible(false);
 var EntityShapeVisualizer = Script.require('./modules/entityShapeVisualizer.js');
 var entityShapeVisualizer = new EntityShapeVisualizer(["Zone"]);
 
-var entityListTool = new EntityListTool(shouldUseEditTabletApp);
+var entityListTool = new EntityListTool(shouldUseEditTabletApp, selectionDisplay);
 
 selectionManager.addEventListener(function () {
     selectionDisplay.updateHandles();
@@ -1137,7 +1139,7 @@ function mousePressEvent(event) {
         return;
     }
     if (isActive) {
-        if (cameraManager.mousePressEvent(event) || selectionDisplay.mousePressEvent(event)) {
+        if (selectionDisplay.mousePressEvent(event) || cameraManager.mousePressEvent(event)) {
             // Event handled; do nothing.
             return;
         }
@@ -1190,6 +1192,8 @@ function mouseMove(event) {
 
 function mouseReleaseEvent(event) {
     mouseDown = false;
+
+    selectionDisplay.mouseReleaseEvent(event);
 
     if (lastMouseMoveEvent) {
         mouseMove(lastMouseMoveEvent);
@@ -1538,6 +1542,7 @@ var lastPosition = null;
 // Do some stuff regularly, like check for placement of various overlays
 Script.update.connect(function (deltaTime) {
     progressDialog.move();
+    selectionDisplay.updateHandles();
     selectionDisplay.checkControllerMove();
     var dOrientation = Math.abs(Quat.dot(Camera.orientation, lastOrientation) - 1);
     var dPosition = Vec3.distance(Camera.position, lastPosition);
