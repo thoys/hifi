@@ -985,6 +985,8 @@ var toolBar = (function () {
             print("starting tablet in landscape mode");
             tablet.landscape = true;
             Controller.enableMapping(CONTROLLER_MAPPING_NAME);
+
+            cameraManager.enable();
             // Not sure what the following was meant to accomplish, but it currently causes
             // everybody else to think that Interface has lost focus overall. fogbugzid:558
             // Window.setFocus();
