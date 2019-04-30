@@ -20,7 +20,7 @@ public slots:
     static PlatformInfoScriptingInterface* getInstance();
 
     /**jsdoc
-    * Returns the Operating Sytem type
+    * Returns the Operating System type
     * @function Test.getOperatingSystemType
     * @returns {string} "WINDOWS", "MACOS" or "UNKNOWN"
     */

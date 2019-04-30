@@ -41,19 +41,32 @@ namespace InteractiveWindowEnums {
 using namespace InteractiveWindowEnums;
 
 /**jsdoc
+ * Multi purpose QML window which can toggle between virtual and native presentation mode.
+ *
  * @class InteractiveWindow
+ * @hideconstructor
  *
  * @hifi-interface
  * @hifi-client-entity
  * @hifi-avatar
  *
- * @property {string} title
- * @property {Vec2} position
- * @property {Vec2} size
- * @property {boolean} visible
- * @property {Desktop.PresentationMode} presentationMode
- * 
+ * @property {string} title - title of the window
+ * @property {Vec2} position - position of the window
+ * @property {Vec2} size - size of the window
+ * @property {boolean} visible - visibility of the window
+ * @property {Desktop.PresentationMode} presentationMode - current presentation mode of the window
  */
+
+/**jsdoc
+ * @typedef {object} InteractiveWindow.Properties
+ * @property {string} title - title of the window
+ * @property {Vec2} position - position of the window
+ * @property {Vec2} size - size of the window
+ * @property {boolean} visible - visibility of the window
+ * @property {Desktop.PresentationMode} presentationMode - presentation mode of the window
+ * @property {number} flags - window creation flags, possible options: {@link Desktop|Desktop.ALWAYS_ON_TOP} | {@link Desktop|Desktop.CLOSE_BUTTON_HIDES}
+ */
+
 class InteractiveWindow : public QObject {
     Q_OBJECT
 
@@ -90,36 +103,42 @@ private:
 public slots:
 
     /**jsdoc
+     * Send a message to the QML page
      * @function InteractiveWindow.sendToQml
-     * @param {object} message
+     * @param {object|string} message
      */
     // Scripts can use this to send a message to the QML object
     void sendToQml(const QVariant& message);
 
     /**jsdoc
+     * Sends an event to the optionally embedded webpage
      * @function InteractiveWindow.emitScriptEvent
-     * @param {object} message
+     * @param {object|string} message
      */
     // QmlWindow content may include WebView requiring EventBridge.
     void emitScriptEvent(const QVariant& scriptMessage);
 
     /**jsdoc
+     * Sends an event to the optionally embedded webpage
      * @function InteractiveWindow.emitWebEvent
-     * @param {object} message
+     * @param {object|string} message
      */
     void emitWebEvent(const QVariant& webMessage);
 
     /**jsdoc
+     * Closes the window
      * @function InteractiveWindow.close
      */
     Q_INVOKABLE void close();
 
     /**jsdoc
+     * Shows the window
      * @function InteractiveWindow.show
      */
     Q_INVOKABLE void show();
 
     /**jsdoc
+     * Bring the window to top
      * @function InteractiveWindow.raise
      */
     Q_INVOKABLE void raise();
@@ -127,42 +146,49 @@ public slots:
 signals:
 
     /**jsdoc
+     * The visibility of the window is changed
      * @function InteractiveWindow.visibleChanged
      * @returns {Signal}
      */
     void visibleChanged();
 
     /**jsdoc
+     * The window has been repositioned
      * @function InteractiveWindow.positionChanged
      * @returns {Signal}
      */
     void positionChanged();
 
     /**jsdoc
+     * The window has been resized
      * @function InteractiveWindow.sizeChanged
      * @returns {Signal}
      */
     void sizeChanged();
 
     /**jsdoc
+     * The presentation mode property is changed
      * @function InteractiveWindow.presentationModeChanged
      * @returns {Signal}
      */
     void presentationModeChanged();
 
     /**jsdoc
+     * The window title has been changed
      * @function InteractiveWindow.titleChanged
      * @returns {Signal}
      */
     void titleChanged();
 
     /**jsdoc
+     * The window has been closed
      * @function InteractiveWindow.closed
      * @returns {Signal}
      */
     void closed();
 
     /**jsdoc
+     * Message from QML received
      * @function InteractiveWindow.fromQml
      * @param {object} message
      * @returns {Signal}
@@ -171,6 +197,7 @@ signals:
     void fromQml(const QVariant& message);
 
     /**jsdoc
+     * Message from optional QML embedded webpage
      * @function InteractiveWindow.scriptEventReceived
      * @param {object} message
      * @returns {Signal}
@@ -179,6 +206,7 @@ signals:
     void scriptEventReceived(const QVariant& message);
 
     /**jsdoc
+     * Message from optional QML embedded webpage
      * @function InteractiveWindow.webEventReceived
      * @param {object} message
      * @returns {Signal}
@@ -187,6 +215,8 @@ signals:
 
 protected slots:
     /**jsdoc
+     * This function is used internally for QML to send messages back to this class. <code>sendToScript(msg);</code> is the QML side function to be used for this.
+     * @deprecated
      * @function InteractiveWindow.qmlToScript
      * @param {object} message
      * @returns {Signal}

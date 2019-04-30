@@ -26,15 +26,23 @@
  * @hifi-client-entity
  * @hifi-avatar
  *
- * @property {number} width
- * @property {number} height
+ * @property {number} width - Physical width of screen(s) including task bars and system menus
+ * @property {number} height - Physical height of screen(s) including task bars and system menus
  * @property {number} ALWAYS_ON_TOP - InteractiveWindow flag for always showing a window on top
  * @property {number} CLOSE_BUTTON_HIDES - InteractiveWindow flag for hiding the window instead of closing on window close by user
  */
+
+/**jsdoc
+ * The presentation mode determines on which desktop a window is rendered.
+ * @typedef Desktop.PresentationMode
+ * @property {number} VIRTUAL - Virtual presentation mode is using the rendered desktop
+ * @property {number} NATIVE - Native presentation mode is using the native desktop
+ */
+
 class DesktopScriptingInterface : public QObject, public Dependency {
     Q_OBJECT
-    Q_PROPERTY(int width READ getWidth)  // Physical width of screen(s) including task bars and system menus
-    Q_PROPERTY(int height READ getHeight)  // Physical height of screen(s) including task bars and system menus
+    Q_PROPERTY(int width READ getWidth)
+    Q_PROPERTY(int height READ getHeight)
 
     Q_PROPERTY(QVariantMap PresentationMode READ getPresentationMode CONSTANT FINAL)
     Q_PROPERTY(int ALWAYS_ON_TOP READ flagAlwaysOnTop CONSTANT FINAL)
@@ -42,11 +50,38 @@ class DesktopScriptingInterface : public QObject, public Dependency {
 
 public:
     Q_INVOKABLE void setHUDAlpha(float alpha);
-    Q_INVOKABLE void show(const QString& path, const QString&  title);
 
+    /**jsdoc
+     * Load a QML file into the virtual desktop
+     * 
+     * @function Desktop.show
+     * @param {string} path - Path to the QML file
+     * @param {string} title - title of the virtual window
+     */
+    Q_INVOKABLE void show(const QString& path, const QString& title);
+
+    /**jsdoc
+     * Create an instance of the InteractiveWindow, which is a multi purpose QML window that can toggle between native and virtual modes.
+     * 
+     * @function Desktop.createWindow
+     * @param {string} sourceUrl - Url to the source QML file
+     * @param {InteractiveWindow.Properties} properties - Interactive window initial properties
+     * @return {InteractiveWindow}
+     */
     Q_INVOKABLE InteractiveWindowPointer createWindow(const QString& sourceUrl, const QVariantMap& properties = QVariantMap());
 
+    /**jsdoc
+     * Physical width of screen(s) including task bars and system menus
+     * @function Desktop.getWidth
+     * @return {number}
+     */
     int getWidth();
+
+    /**jsdoc
+     * Physical height of screen(s) including task bars and system menus
+     * @function Desktop.getHeight
+     * @return {number}
+     */
     int getHeight();
 
 
